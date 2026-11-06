@@ -1,7 +1,7 @@
 mod common;
 
 use common::{halted, image, os};
-use lc3::{BootFailure, Case, Failure, IllegalKind, Outcome, prepare, run};
+use lc3::{BootFailure, Case, Failure, IllegalKind, Outcome, PrepareError, prepare, run};
 use std::num::NonZeroU32;
 
 #[test]
@@ -28,13 +28,10 @@ fn zero_cycle_cap_stops_before_even_an_illegal_word() {
 }
 
 #[test]
-fn preparation_rejects_missing_images_explicitly() {
-    assert_eq!(
-        prepare(&os(), &[], latency()),
-        Err(BootFailure {
-            reason: Failure::MissingImages
-        })
-    );
+fn preparation_rejects_missing_images_before_boot() {
+    for os in [os(), image(0x0200, &[0xd000])] {
+        assert_eq!(prepare(&os, &[], latency()), Err(PrepareError::NoImages));
+    }
 }
 
 #[test]
@@ -46,13 +43,13 @@ fn boot_reports_illegal_words_and_the_fixed_cycle_cap() {
                 &[image(0x3000, &[0xf025])],
                 latency()
             ),
-            Err(BootFailure {
+            Err(PrepareError::Boot(BootFailure {
                 reason: Failure::IllegalInstruction {
                     pc: 0x0200,
                     word,
                     kind,
                 }
-            })
+            }))
         );
     }
     assert_eq!(
@@ -61,9 +58,9 @@ fn boot_reports_illegal_words_and_the_fixed_cycle_cap() {
             &[image(0x3000, &[0xf025])],
             latency()
         ),
-        Err(BootFailure {
+        Err(PrepareError::Boot(BootFailure {
             reason: Failure::CycleCapReached
-        })
+        }))
     );
 }
 

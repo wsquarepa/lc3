@@ -57,8 +57,6 @@ pub enum Failure {
         word: u16,
         kind: IllegalKind,
     },
-    /// Preparation requires at least one image to supply the run's origin.
-    MissingImages,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,23 +70,30 @@ pub struct BootFailure {
     pub reason: Failure,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareError {
+    /// Boot stopped because of the failure carried by `BootFailure`.
+    Boot(BootFailure),
+    /// No images were supplied to provide the run's origin; boot was not attempted.
+    NoImages,
+}
+
 /// Boots `os` from x0200, then loads nonempty `images` in order and selects the
 /// first origin. Image addresses wrap modulo x10000. Returns a shareable prepared
-/// machine, or `BootFailure` for missing images, a boot cap, or an illegal word.
+/// machine, `PrepareError::NoImages` before boot for empty `images`, or
+/// `PrepareError::Boot` for a boot cap or an illegal word during boot.
 /// Boot uses a fixed 10,000,000-cycle cap and contributes no run cycles.
 pub fn prepare(
     os: &Image,
     images: &[Image],
     mem_latency: NonZeroU32,
-) -> Result<Prepared, BootFailure> {
-    let first = images.first().ok_or(BootFailure {
-        reason: Failure::MissingImages,
-    })?;
+) -> Result<Prepared, PrepareError> {
+    let first = images.first().ok_or(PrepareError::NoImages)?;
     let (boot_snapshot, _) = State::zeroed()
         .load_image(os)
         .start_at(0x0200)
         .execute(mem_latency, BOOT_CYCLE_CAP)
-        .map_err(|reason| BootFailure { reason })?;
+        .map_err(|reason| PrepareError::Boot(BootFailure { reason }))?;
     let snapshot = images
         .iter()
         .fold(boot_snapshot, State::load_image)
