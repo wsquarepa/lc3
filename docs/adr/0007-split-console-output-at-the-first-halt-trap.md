@@ -1,0 +1,3 @@
+# Split console output at the first HALT trap
+
+Program output is the console bytes written before the run first executes `TRAP x25`; halt output is everything after. Cutting `lc3sim` output at the reference OS's `--- halting the LC-3 ---` text does not generalize, because the halt text varies by OS (the bundled OS shortens it), so the split is by mechanism rather than by string. For the reference OS this yields the same trimmed program output, including on the undefined-trap path, where the reference OS prints its message before falling into HALT. A run that halts by writing the machine control register directly has no halt output.

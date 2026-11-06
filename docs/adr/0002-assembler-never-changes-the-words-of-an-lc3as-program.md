@@ -1,0 +1,3 @@
+# The assembler never changes the words of a program lc3as accepts
+
+For any source `lc3as` assembles without error, our assembler either produces identical words or rejects the source with an error; it never produces different words. Stricter is safe because the user sees the error, while different words would make a cycle count measure a different program from the one `lc3sim` ran. This rule is why, for example, `ADD R0,R0,#16` (silently -16 in `lc3as`) is an error, a second `.ORIG` (ignored by `lc3as`) is an error, and mnemonics stay case-insensitive (`lc3as` is built with `flex -i`). Syntax `lc3as` rejects may be added freely.
