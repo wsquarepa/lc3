@@ -135,7 +135,7 @@ fn parse_run_file(
 ) -> Result<RunSpec, UsageError> {
     let text = String::from_utf8(bytes)
         .map_err(|error| UsageError(format!("{name}: run file is not UTF-8: {error}")))?;
-    run_file::parse(&text, name, unspecified_input).map_err(|error| UsageError(error.to_string()))
+    run_file::parse(&text, name, unspecified_input)
 }
 
 fn read_console_input(input: &ConsoleInput) -> Result<Vec<u8>, UsageError> {

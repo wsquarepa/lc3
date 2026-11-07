@@ -1,5 +1,6 @@
 //! Parsing and validation of run files (TOML) into a [`RunSpec`] without any I/O.
 
+use super::exit::UsageError;
 use super::literal::{self, ADDRESS_RANGE, LiteralError, WORD_RANGE};
 use lc3::{Case, MemoryPoke, Pokes, Register, Trigger};
 use serde::Deserialize;
@@ -60,31 +61,22 @@ impl RunSpec {
     }
 }
 
-/// A run-file problem; the message names the run file and the offending key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunFileError(pub String);
-
-impl fmt::Display for RunFileError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
 /// Parses `text`, which `name` identifies in error messages. `unspecified_input`
 /// is the console input when the file gives neither `input` nor `input_file`.
+/// Every error names the run file and, where one applies, the offending key.
 /// Errors cover TOML syntax, unknown or missing keys, wrong types, malformed or
 /// out-of-range values, an empty `images`, and `input` together with `input_file`.
 pub fn parse(
     text: &str,
     name: &str,
     unspecified_input: ConsoleInput,
-) -> Result<RunSpec, RunFileError> {
+) -> Result<RunSpec, UsageError> {
     let raw: RawRunFile = toml::from_str(text).map_err(|error| fail(name, error))?;
     convert(raw, unspecified_input).map_err(|message| fail(name, message))
 }
 
-fn fail(name: &str, message: impl fmt::Display) -> RunFileError {
-    RunFileError(format!("{name}: {message}"))
+fn fail(name: &str, message: impl fmt::Display) -> UsageError {
+    UsageError(format!("{name}: {message}"))
 }
 
 #[derive(Deserialize)]
