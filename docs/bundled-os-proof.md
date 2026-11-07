@@ -21,7 +21,7 @@ A routine's cost runs from the TRAP fetch through the instruction that returns, 
 | OUT | M + I + A | 39 | 21 | optimal (argument and search) |
 | IN | 7M + A | 99 | 54 | optimal (argument and search) |
 | HALT | 19M + 11A | 335 | 188 | optimal (search) |
-| PUTS, L = 0 | 4M + A + B | 69 | 39 | |
+| PUTS, L = 0 | 4M + A + B | 69 | 39 | within 1 of the per-length lower bound (the entry branch is taken) |
 | PUTS, L >= 1 | see "PUTS" | 142 at L=1, 1270 at L=32, 7000 at L=200 | 79, 709, 3913 | worst-case gap to the per-length lower bound 59 over 0 ≤ L ≤ 1000 at N=4 (38 at N=1); best among every design examined, not proven against all designs |
 | PUTSP | see "PUTSP" | 255 + per word (124-143, plus 17 per eight words) | 138 + per word (73-86, plus 11 per eight words) | best known; one class meets the proven per-word lower bound up to the amortized block cost |
 
@@ -78,13 +78,13 @@ The image is x0200-x223C (8253 words). That is 1165 words of code and data, 3 ad
 
 **L3 (device access).** Because of the layout constraint, a KBDR read, DDR write or MCR write is either LDI/STI through a pointer cell (I) or LDR/STR off a base register (M plus the cost of creating the base). The base window for DDR is [xFDE7, xFE26] (xFE06 within offset6 -32..31), for KBDR [xFDE3, xFE22], and for MCR [xFFDE, x001E]. The last includes x0000: `STR R0,R0,#-2` with R0 = 0 writes 0 to xFFFE.
 
-**L4 (window constants).** A register value in the DDR or KBDR window can only come from (a) a load (at least M), (b) NOT of a value in [x01D9, x0218], or (c) an ALU op whose operand already lies in or near the window. Proof: on the generic path, constants come from LEA, JSR, TRAP (values in [x0101, x3000], L3's reach), AND #0 (x0000), loads, or ALU ops on earlier constants. One ALU op on such a constant reaches the window only by NOT of [x01D9, x0218]. ADD/AND with immediates or with two such constants stay within [x0000, x61FE] or below their operands. Among values in [x01D9, x0218], the only one whose low byte is a character a routine prints is x020A, a linefeed (low byte x0A); its complement xFDF5 is a base whose low byte, xF5, is not printed. So creating a base costs a load (M), or an LEA plus NOT (2A > M), or one NOT of an x020A linefeed constant that was needed anyway (A, but the result's low byte is not a printed character).
+**L4 (window constants).** A register value in the DDR or KBDR window can only come from (a) a load (at least M), (b) NOT of a value in [x01D9, x021C], or (c) an ALU op whose operand already lies in or near the window. Proof: on the generic path, constants come from LEA, JSR, TRAP (values in [x0101, x3000], L3's reach), AND #0 (x0000), loads, or ALU ops on earlier constants. One ALU op on such a constant reaches the window only by NOT of [x01D9, x021C]. ADD/AND with immediates or with two such constants stay within [x0000, x61FE] or below their operands. Among values in [x01D9, x021C], the only one whose low byte is a character a routine prints is x020A, a linefeed (low byte x0A); its complement xFDF5 is a base whose low byte, xF5, is not printed. So creating a base costs a load (M), or an LEA plus NOT (2A > M), or one NOT of an x020A linefeed constant that was needed anyway (A, but the result's low byte is not a printed character).
 
 **L5 (carries go up).** For ADD, AND and NOT, bit i of the result depends only on bits 0..i of the operands. So the low byte of any ALU result depends only on the operands' low bytes, and a value's high byte can reach a register's low byte only through control flow (branches), a load from a data-dependent address, or a data-dependent jump.
 
 **L6 (round trips).** If at some instant the values that must survive (tokens such as R7's return address, an input byte, and the entry values of R1-R6) outnumber the registers free to hold them, the excess must go to memory and come back: a store and a load, 2M each. An ALU "packing" of two tokens into one register cannot replace this. By L5, final low bytes after the instant are functions of the low bytes at the instant (absent loads of stored values and absent branches). One low byte fewer than needed cannot carry them, and branching to rebuild a byte costs at least 8A > 2M (L2). Executing a stored word as an instruction to restore a value costs a store (M), plus the executed instruction (A), plus building a word with an opcode around the value (A): at least M + 2A > 2M. Using one of R1-R6 as scratch costs at least a copy and a restore (2A) or a store and a load (2M). The spill slot is an ordinary data word: a spill of the return address by `STI` into a trap vector, returned through by `TRAP` (I + M, cheaper than ST + LD + RET by 3 at every N), is excluded by the vector-table rule in "Memory layout".
 
-**L7 (register-register ALU ops add nothing).** An ADD or AND of two registers needs both operands present. By L4 a device-window base needs a NOT of a value in [x01D9, x0218] among its operands, since sums of two LEA-span values stay in [x0202, x61FE] and ANDs stay at or below x30FF, neither of which meets a window; so a register-register base costs at least NOT + ADD = 2A on top of operands that exist for other reasons, and 2A > M, so a load dominates. A non-window value with a chosen low byte costs one LEA, and zero costs one `AND #0`. Hence the searches may omit register-register ALU steps without raising any minimum.
+**L7 (register-register ALU ops add nothing).** An ADD or AND of two registers needs both operands present. By L4 a device-window base needs a NOT of a value in [x01D9, x021C] among its operands, since sums of two LEA-span values stay in [x0202, x61FE] and ANDs stay at or below x30FF, neither of which meets a window; so a register-register base costs at least NOT + ADD = 2A on top of operands that exist for other reasons, and 2A > M, so a load dominates. A non-window value with a chosen low byte costs one LEA, and zero costs one `AND #0`. Hence the searches may omit register-register ALU steps without raising any minimum.
 
 ## Search model
 
@@ -145,7 +145,7 @@ Scratch registers. Both searches track R0, R7 and at most one of R1-R6; the thre
 
 ### Objective
 
-The objective is a hybrid: minimize the worst case over 0 ≤ L ≤ 1000 of gap(L) = T(L) - LB(L) at N=4, where LB is the per-length lower bound below; ties go to the smaller gap at short lengths. Earlier objectives ("marginal cost first", then "the 64-word loop for realistic lengths") were replaced by it.
+The objective is a hybrid: minimize the worst case over 0 ≤ L ≤ 1000 of gap(L) = T(L) - LB(L) at N=4, where LB is the per-length lower bound below; ties go to the smaller gap at short lengths.
 
 ### Design (shipped): base prefix, then the 64-word stride loop
 
@@ -186,7 +186,7 @@ LB(L) = 4M + 2A + L(2M + A) + min(L(N + 1), 3M)
         + [L ≥ 32] min(2M + A*ceil((L - 31) / 64), 2A*ceil((L - 31) / 15))
 ```
 
-so LB(0) = 4M + 2A. A design whose empty-string check falls through (`ST R7; LDR R7,R0,#0; BRnp NONEMPTY; LD R7; RET`) meets it. An earlier form of this bound stated LB(0) = 4M + A + B, which no design is bound by, and charged the last term as 2M + A·ceil((L - 31)/64) alone, which design X below beats (see "Verification"). The terms:
+so LB(0) = 4M + 2A. A design whose empty-string check falls through (`ST R7; LDR R7,R0,#0; BRnp NONEMPTY; LD R7; RET`) meets it. The value 4M + A + B at L = 0 is not a lower bound for all fitting designs, and neither is a last term of 2M + A·ceil((L - 31)/64) alone: design X below beats it (see "Verification"). The terms:
 
 - TRAP (M) and RET (A).
 - L + 1 loads of string words (LDR, M) and L + 1 word-dependent instructions (at least A each; P2 step 1).
@@ -214,13 +214,13 @@ floor((L + 32)/64) = ceil((L - 31)/64) cancels the load-route ADD term exactly. 
 | N=4 | 1 | 35 | 30 | 15 | 5 | 1 | 1 | 1 | 0 | 59 | 59 | 43 | 43 | 41 | 40 | 42 | 42 | 43 | 56 |
 | N=1 | 1 | 20 | 18 | 12 | 8 | 6 | 2 | 1 | 0 | 32 | 32 | 23 | 23 | 23 | 22 | 24 | 24 | 25 | 38 |
 
-Worst case over 0 ≤ L ≤ 1000: **59 at N=4** (every L in 32..46) and **38 at N=1** (L = 992). Over L ≤ 100 it is 59 (N=4) and 32 (N=1). Over every possible length (L ≤ 65535) the back edges accumulate to 1064 (1046).
+Worst case over 0 ≤ L ≤ 1000: **59 at N=4** (every L with 32 ≤ L ≤ 46) and **38 at N=1** (L = 992). Over L ≤ 100 it is 59 (N=4) and 32 (N=1). Over every possible length (L ≤ 65535) the back edges accumulate to 1064 (1046).
 
 The empty string's gap of 1 comes from the tie-break, which makes the empty string pay the taken entry branch. The alternative (`BRnp` to the non-empty path) would give gap(0) = 0 but add the taken cycle to every L ≥ 1, raising the worst case to 60 (39 at N=1) and every short-length gap by one.
 
 ### P2. Slope
 
-These steps are unchanged in substance from the analysis of the plain 64-word design.
+These steps hold for the plain 64-word stride loop and the shipped loop alike.
 
 1. **Per character, at least 2M + A.** Each word needs an LDR (M), a DDR store (at least M), and an instruction whose behavior depends on that word before its byte is stored (at least A).
 2. **Per 64 characters, at least one more A.** Each LDR base value covers at most 64 words (offset6), and each new base value is a register write.
@@ -238,17 +238,7 @@ Classes analyzed, with costs derived from the cycle table:
 - **STI with ADD-#15 blocks.**
 - **STI with offsets only** (L ≤ 31).
 
-Worst-case gap over L ≤ 100 at N=4 (N=1), measured against the load route of LB alone (the form of the bound before the immediate route was added; the corrected bound raises every design's gap at 32 ≤ L ≤ 61 by the same route difference, so the ranking is unchanged):
-
-| Design | Worst gap, L ≤ 100 |
-|---|---|
-| shipped | 42 (24) |
-| H(0, 31) ignoring code reach | 41 (23) |
-| H(j, k), every other (j, k) | at least 46 (25) when j > 0; at least 66 (36) when k < 31 |
-| plain 64-word | 100 (55) |
-| ADD-#15 | 61 (34) |
-| maximal unroll | 134 (74) |
-| STI with ADD-#15 blocks | 500 (206) |
+The shipped design's worst gap over L ≤ 100 is 59 (32) at N=4 (N=1). No other class in the list has a smaller worst gap over 0 ≤ L ≤ 1000, except the idealized H(0, 31), one cycle better at N=4, which this layout cannot realize (see below), and the N=1 tie noted below.
 
 Why each alternative loses:
 
@@ -257,14 +247,14 @@ Why each alternative loses:
 - **The 1-cycle loss against the idealized H(0, 31)** is forced by reach in this class. Between the prologue's spills (R7, R1) and the epilogue's restores there are more than 256 words of straight-line code, so their slots can only sit inside it, which costs every longer string a taken branch over them. The alternatives cost more: restores through pointers cost 2(N + 1) more on long exits, and a jump back from the far end is out of branch reach or costs M + A.
 - **N=1.** The best switch point is the same over L ≤ 100. Over L ≤ 1000 at N=1, switch points k < 31 tie with k = 31 at the growth-dominated maximum (37 idealized). The tie-break by short-length gaps picks k = 31, because k < 31 leaves a 36-cycle band.
 
-With the literal objective over all L ≤ 65535, the maximal unroll's slower back-edge growth gives it the smaller worst case (570 against 1064). The plain 64-word design is 1 lower than the shipped one (1063), because of the jump-over cycle. That end of the range is set by loop closure, which no switch point changes, so the switch point is chosen on L ≤ 100 (and is the same on L ≤ 1000).
+With the literal objective over all L ≤ 65535, the maximal unroll's slower back-edge growth gives it the smaller worst case (570 against 1064). The plain 64-word design is 1 lower than the shipped one (1063), because of the jump-over cycle. That end of the range is set by loop closure, which no switch point changes, so the switch point is chosen on the objective's range, 0 ≤ L ≤ 1000.
 
 ### What is and is not proven
 
 **Proven:**
 
-- LB(L) holds for every fitting design at every L ≥ 0 (P1, with the immediate route in its last term; the earlier load-only form was refuted by design X at 32 ≤ L ≤ 46 and by X2 at 47 ≤ L ≤ 61).
-- The shipped design's exact gap at every L is the closed form above; the formula was checked by measurement at every L in 0..1000 at both latencies.
+- LB(L) holds for every fitting design at every L ≥ 0 (P1, whose last term is the smaller of the load route and the immediate route; the load-route-only form does not hold: design X beats it at 32 ≤ L ≤ 46 and X2 at 47 ≤ L ≤ 61).
+- The shipped design's exact gap at every L is the closed form above; the formula was checked by measurement at every L with 0 ≤ L ≤ 1000 at both latencies.
 - Its loop slope is within 1/64 of the universal floor and optimal among single-branch loops (P2).
 - Within the classes in P3 and among the immediate-ADD block designs X, X2, Z1 and Z2 below, no design has a smaller worst-case gap over 0 ≤ L ≤ 1000, at either latency. The exceptions are the idealized H(0, 31), which this layout cannot realize, and the N=1 tie noted in P3.
 
@@ -273,19 +263,19 @@ With the literal objective over all L ≤ 65535, the maximal unroll's slower bac
 - That no fitting design outside those classes has a smaller worst-case gap. Untried shapes include a different prefix register allocation, a loop that keeps the string start recoverable without a spill, or a closure structure LB does not charge.
 - That LB is tight: it omits loop closure and the stride register's 3M, and its short-length STI branch is met only by the STI design.
 
-### Superseded and rejected designs
+### Rejected designs
 
 | Design | Why it was not kept |
 |---|---|
 | ADD-#15 unroll | worst gap 61 (34) over L ≤ 100 |
 | plain 64-word loop with stride register | worst gap 100 at L = 1 |
 | maximal unroll, 1216 words per iteration with a register back edge, slope 2M + A + 20A/1216 (34.13158 / 19.08224) | dearer for every L below 4865 (N=4) and 2369 (N=1) |
-| design X: shipped prefix, then one immediate-ADD block (ADD R0,R0,#15; words 32-46 at offsets 17-31; exits undo the ADD), then the stride loop with R0 + 15 spilled | faster than the shipped design for 32 ≤ L ≤ 46 at N=4 (1212 against 1270 at L = 32, 1687 against 1746 at L = 46; at L = 47 it costs 1796 against 1780) and at L = 32..46 at N=1 (678 against 709, 943 against 975), but its loop windows start at 47 + 64m while LB charges one pointer write per window 32 + 64m, so it executes one ADD more than LB charges for 49 of every 64 lengths, plus the undo: worst gap 71 (47) at L = 943 |
+| design X: shipped prefix, then one immediate-ADD block (ADD R0,R0,#15; words 32-46 at offsets 17-31; exits undo the ADD), then the stride loop with R0 + 15 spilled | faster than the shipped design for 32 ≤ L ≤ 46 at N=4 (1212 against 1270 at L = 32, 1687 against 1746 at L = 46; at L = 47 it costs 1796 against 1780) and at 32 ≤ L ≤ 46 at N=1 (678 against 709, 943 against 975), but its loop windows start at 47 + 64m while LB charges one pointer write per window 32 + 64m, so it executes one ADD more than LB charges for 49 of every 64 lengths, plus the undo: worst gap 71 (47) at L = 943 |
 | design X2: as X with a second block for words 47-61 | faster than the shipped design for 32 ≤ L ≤ 61 at N=4, but worst gap 87 (57) at L = 958 |
-| design Z1: as X but R0 is spilled before the block, so the loop exit reloads instead of undoing | worst gap 63 (42) at L = 943; over L ≤ 100 alone it would win at N=4 (51 against 59), which the objective over 0..1000 does not reward |
+| design Z1: as X but R0 is spilled before the block, so the loop exit reloads instead of undoing | worst gap 63 (42) at L = 943; over L ≤ 100 alone it would win at N=4 (51 against 59), which the objective over 0 ≤ L ≤ 1000 does not reward |
 | design Z2: as Z1 with two blocks | worst gap 71 (47) at L = 958 |
 
-Worst gaps are over 0 ≤ L ≤ 1000 against the corrected LB, N=4 (N=1). Every immediate-ADD block loses at the long end for the same reason: realigning the loop windows (ADD #-15 before the loop) costs the same A on every L ≥ 47, and covering 32..95 by immediates before the loop costs 4A extra on every L ≥ 92. So within "prefix, immediates, stride loop" the switch at 31 is best for the maximum over 0..1000 at both latencies.
+Worst gaps are over 0 ≤ L ≤ 1000 against LB, N=4 (N=1). Every immediate-ADD block loses at the long end for the same reason: realigning the loop windows (ADD #-15 before the loop) costs the same A on every L ≥ 47, and covering 32 ≤ L ≤ 95 by immediates before the loop costs 4A extra on every L ≥ 92. So within "prefix, immediates, stride loop" the switch at 31 is best for the maximum over 0 ≤ L ≤ 1000 at both latencies.
 
 The maximal unroll is slope-optimal among all designs that fit with PUTSP's table; that argument, from the run structure and branch reach, is not reproduced here.
 
@@ -336,7 +326,7 @@ Per word printing both bytes, with h ≥ x20: at least **4M + 9A** (124 / 73) pl
 |---|---|---|
 | Reference-style shift loop (8 rotate steps per high byte) | more than 280 | slowest |
 | Full 8-level branch tree, LEA leaves, no table (about 1300 words) | about 204 | slower than the tree plus table |
-| 3-level tree plus 32-row table, one pointer ADD per word, natural branch directions (the earlier design) | 133-149 plus the per-word ADD | superseded by the unrolled design: 124-143 plus 2.125 amortized, fixed 255 instead of 259 |
+| 3-level tree plus 32-row table, one pointer ADD per word, natural branch directions | 133-149 plus the per-word ADD | dearer than the unrolled design: 124-143 plus 2.125 amortized, fixed 255 instead of 259 |
 | 3-level tree plus 32-row table, unrolled eight times (shipped) | 124-143 | |
 | 2-level tree plus 64-row table | | does not fit the region (64 pages > 46), and no table can carry W[13] with four more bits (48 pages > 46) |
 | 4-level tree plus 16-row table | about 16 more per word | slower; the space it frees is not needed |
@@ -373,35 +363,35 @@ python3 tools/bundled_os_search2.py --regs 2                 # independent searc
 
 ## Verification
 
-Every claim above was re-derived independently of its original author, with the aim of breaking it: each lower-bound argument was either accepted with a fresh justification or refuted by a concrete design measured through the simulator at N=1 and N=4; each search was rerun and a second search was written from scratch; and the design space of every routine was attacked within the contract (output and R0 equal to the reference OS, R1-R6 preserved, the layout rule, and the PUTS objective). Verdicts are **accepted**, **refuted and corrected**, **improved**, or **open** with the remaining gap.
+Each claim above was checked by trying to break it: every lower-bound argument was checked against concrete designs measured through the simulator at N=1 and N=4; both searches were run and agree; and the design space of every routine was explored within the contract (output and R0 equal to the reference OS, R1-R6 preserved, the layout rule, and the PUTS objective). Each verdict below is **optimal**, **bounded** with the remaining gap, or **open**.
 
-### GETC and OUT: accepted
+### GETC and OUT: optimal
 
 M + I + A (39 / 21). TRAP (M), one device access into or out of R0 (I; an LDR or STR needs a base that costs at least A to create, and A + M > I at every N: 9 + 3N against 6 + 3N), and a return (A, nothing cheaper exists). Both searches find 21 / 39 in every mode, including with a third tracked register and with the vector-table spill allowed.
 
-### IN: accepted under the vector-table rule, which is now stated
+### IN: optimal under the vector-table rule
 
-7M + A (99 / 54). The argument's hidden assumption was that the round trip of the return address goes through a data word. With an `STI` into an unassigned trap vector and a `TRAP` through it as the return, IN costs 6M + I (96 / 51), measured, with the contract's output, R0 and R1-R6; the second search in vector mode finds exactly that minimum. The design is excluded because UnknownTrap requires every unassigned vector to hold the sentinel for the whole run, which is now written into "Memory layout" as part of the contract, into L6, and into the search model's spill step. Under the rule the routine is optimal: both searches agree at 99 / 54, including with a third register.
+7M + A (99 / 54). Without the rule, an `STI` into an unassigned trap vector and a `TRAP` through it as the return would make IN cost 6M + I (96 / 51), measured, with the contract's output, R0 and R1-R6; the second search in vector mode finds exactly that minimum. That design is excluded because UnknownTrap requires every unassigned vector to hold the sentinel for the whole run; the rule is part of the contract in "Memory layout", in L6, and in the search model's spill step. Under the rule both searches agree at 99 / 54, including with a third register.
 
-### HALT: accepted
+### HALT: optimal
 
 19M + 11A (335 / 188). Eighteen forced memory instructions (TRAP, sixteen DDR stores, the MCR store), one base load (LEA + NOT costs 2A > M and yields a base that prints nothing), and eleven register writes (ten character runs for one character register plus the required zero; the base covers the two linefeeds or the two spaces, never both). Both searches find 335 / 188 with two tracked registers; the three-register case is argued in the HALT section rather than searched (about ten million states), and every design that uses R1-R6 costs at least 2M - A more.
 
-### Lemmas and searches: accepted, with L7 added
+### Lemmas and searches
 
-L1, L2, L3 and L5 were accepted by argument. L4's finite claims were checked by brute force over the LEA span: only NOT of x01D9-x0218 (DDR) and x01DD-x021C (KBDR) reaches a window in one instruction; ADD and AND of two LEA-span values stay in [x0202, x61FE] and at or below x30FF. L6 is correct for data-word spills and now excludes vector spills explicitly. L7 (register-register ALU ops add nothing) was added to justify an omission both searches make. The original search's output was reproduced byte for byte and its assertions pass; the second search reaches the same minima with a wider model (exact zero and MCR classes, NOT in both directions, separate device windows, LDI/STI paths, copies and spills, a restorable third register).
+L1, L2, L3 and L5 hold by argument. L4's finite claims were checked by brute force over the LEA span: only NOT of x01D9-x0218 (DDR) and x01DD-x021C (KBDR) reaches a window in one instruction; ADD and AND of two LEA-span values stay in [x0202, x61FE] and at or below x30FF. L6 holds for data-word spills and excludes vector spills explicitly. L7 (register-register ALU ops add nothing) justifies an omission both searches make. The second search uses a wider model than the first (exact zero and MCR classes, NOT in both directions, separate device windows, LDI/STI paths, copies and spills, a restorable third register) and reaches the same minima.
 
 The search space was checked for excluded valid sequences: self-modifying code (the only useful data-dependent control transfer is TRAP through a vector word, which is the excluded IN design; patching instruction words cannot encode a 16-bit target or remove a forced device access), use of R7 (present in both searches), reuse of condition codes and branches (the four routines are straight-line by L2), data inside code and executing data as instructions (every window constant xFDE7-xFE26 and xFFDE-xFFFF decodes as a malformed TRAP and is illegal; executing a stored word to restore a register costs at least M + 2A > 2M), overlapping or shared routine tails (saves words, never cycles), and vector-table entries pointing into x0000-x00FF, outside the layout, or into another routine (illegal, out of layout, or no cheaper than entering normally).
 
-### PUTS: closed form accepted; lower bound refuted and corrected; design kept; "best among all designs" open
+### PUTS: exact cost and per-length bound verified; "best among all designs" open
 
-- **Closed form: accepted.** The cost formula was checked against measurement at every L in 0..1000 at both latencies (2002 runs, no mismatch); output and R0 equal the reference OS and R1-R6 are preserved in every run.
-- **Per-length lower bound: refuted and corrected.** The earlier bound charged every design with 33 or more words a round trip (2M) for the moved pointer, assuming it is restored by a load. A pointer moved by an immediate ADD can be restored by an immediate ADD. Design X (the shipped prefix; when word 31 is non-zero, `ADD R0,R0,#15` and words 32-46 at offsets 17-31, with every exit from that block undoing the ADD; when word 46 is non-zero, the stride loop with R0 + 15 spilled and undone on exit) passes the contract at every L in 0..1000 at both latencies and costs 1212 at L = 32 and 1687 at L = 46 at N=4 (678 and 943 at N=1), below the earlier bound's 1229 and 1705 (686 and 952). A two-block variant beats it at 47..61 at N=4 as well. The bound's last term is now the minimum of the load route and the immediate route, 2A per further 15 words; under the corrected bound design X costs at most one cycle above it at 32..46. The other terms of P1 (TRAP and RET, L + 1 loads and decisions, L stores, one round trip, the base term, A per 64 words) were accepted with their own justifications.
-- **Gaps: recomputed.** Against the corrected bound the shipped design's worst gap over 0 ≤ L ≤ 1000 is 59 at N=4 (every L in 32..46) and 38 at N=1 (L = 992); the earlier figures 42 and 56 (24 and 38) were correct against the earlier bound. The objective's ranking of designs is unchanged: X, X2, Z1 and Z2 (worst gaps 71, 87, 63, 71 at N=4) all lose at the long end because an immediate block misaligns the loop windows with the bound's 64-word charge, and the P3 classes lose as before. The ranges where these designs beat the shipped one (X at 32 ≤ L ≤ 46, X2 at 32 ≤ L ≤ 61, both at N=4) are recorded under "Superseded and rejected designs".
-- **No better design over 0..1000: open.** Not refuted; every design measured or argued (the P3 classes, the four immediate-ADD block designs, stride loops without a fourth register, state kept in R7, computed jumps and self-modifying code, shared epilogues, and a different placement of the slot block) has a larger worst-case gap or is dominated. The bound is known to be loose by up to 3M for L ≥ 62 and by the back edges, and no design exploits either.
+- **Closed form.** The cost formula matches measurement at every L with 0 ≤ L ≤ 1000 at both latencies (2002 runs, no mismatch); output and R0 equal the reference OS and R1-R6 are preserved in every run.
+- **Per-length lower bound.** A pointer moved by an immediate ADD can be restored by an immediate ADD, so a lower bound that charges every design with 33 or more words a round trip (2M) for the moved pointer is false. Design X (the shipped prefix; when word 31 is non-zero, `ADD R0,R0,#15` and words 32-46 at offsets 17-31, with every exit from that block undoing the ADD; when word 46 is non-zero, the stride loop with R0 + 15 spilled and undone on exit) passes the contract at every L with 0 ≤ L ≤ 1000 at both latencies and costs 1212 at L = 32 and 1687 at L = 46 at N=4 (678 and 943 at N=1), below the 1229 and 1705 (686 and 952) that the load-route-only form would require. A two-block variant beats the shipped design at 47 ≤ L ≤ 61 at N=4 as well. The bound's last term is therefore the minimum of the load route and the immediate route, 2A per further 15 words; design X costs at most one cycle above it at 32 ≤ L ≤ 46. The other terms of P1 (TRAP and RET, L + 1 loads and decisions, L stores, one round trip, the base term, A per 64 words) hold with their own justifications.
+- **Gaps.** Against that bound the shipped design's worst gap over 0 ≤ L ≤ 1000 is 59 at N=4 (every L with 32 ≤ L ≤ 46) and 38 at N=1 (L = 992). X, X2, Z1 and Z2 (worst gaps 71, 87, 63, 71 at N=4) all lose at the long end because an immediate block misaligns the loop windows with the bound's 64-word charge. The ranges where these designs beat the shipped one (X at 32 ≤ L ≤ 46, X2 at 32 ≤ L ≤ 61, both at N=4) are recorded under "Rejected designs".
+- **No better design over 0 ≤ L ≤ 1000: open.** Every design measured or argued (the P3 classes, the four immediate-ADD block designs, stride loops without a fourth register, state kept in R7, computed jumps and self-modifying code, shared epilogues, and a different placement of the slot block) has a larger worst-case gap or is dominated. The bound is loose by up to 3M for L ≥ 62 and by the back edges, and no design exploits either.
 
-### PUTSP: lower bound accepted and tightened; design improved; fixed and amortized costs open
+### PUTSP: per-word bound of 4M + 9A; fixed and amortized costs open
 
-- **Per-word lower bound: accepted and tightened** from 4M + 8A to 4M + 9A (124 / 73). Steps 1, 2, 4 and 5 were accepted, step 2 with a sharper page-count argument (an address can carry at most W[13] of the top three bits, and with it at most three of W[12:8], so no table saves a tree level). Step 3's count of two condition-code writes is not achievable: the NUL decision needs an AND whose low mask byte is xFF, that AND's only other free outcome is W[15], which the LDR already supplies, and W[14] and W[13] need the sign bits of two further writes. The claimed fold of the NUL test into the tree is therefore refuted, not merely unimplemented.
-- **Design: improved.** The earlier design (one pointer ADD per word, natural branch directions, 259 / 142 fixed, 133-149 per word at N=4) was replaced by the eight-copy unroll: 255 / 138 fixed, 124-143 per word (73-86 at N=1), plus 17 / 11 per eight words. Class 011 meets the tightened bound exactly up to the amortized block cost; the earlier estimate that unrolling gains "at most A per word" was low, since the fall-through class also sheds its taken bit-14 branch (A + B). The contract was checked exhaustively for every position 0..16 in the eight-word block and every word value 0..xFFFF (17 × 65536 strings `[x6261 × p, W, x4142, x0000]`, no mismatch against the reference OS in output, R0 or R1-R6), by 20,000 random strings of length 0-199 with NULs in either byte at both latencies, and by the exact-cycle model in `tests/bundled_os.rs` at lengths 0, 1, 2, 5, 7, 8, 9, 16 and 17 for every class, at the 255 non-zero high bytes, and at the three terminators. GETC, OUT, PUTS, IN and HALT are unchanged in output, registers and cycles.
+- **Per-word lower bound.** 4M + 9A (124 / 73). Steps 1, 2, 4 and 5 hold, step 2 with a page-count argument (an address can carry at most W[13] of the top three bits, and with it at most three of W[12:8], so no table saves a tree level). Step 3's count of two condition-code writes is not achievable: the NUL decision needs an AND whose low mask byte is xFF, that AND's only other free outcome is W[15], which the LDR already supplies, and W[14] and W[13] need the sign bits of two further writes. No design folds the NUL test into the tree.
+- **Design.** The eight-copy unroll: 255 / 138 fixed, 124-143 per word (73-86 at N=1), plus 17 / 11 per eight words. Class 011 meets the bound exactly up to the amortized block cost; unrolling gains more than A per word because the fall-through class also sheds its taken bit-14 branch (A + B). The contract was checked exhaustively for every position 0 to 16 in the eight-word block and every word value 0 to xFFFF (17 × 65536 strings `[x6261 × p, W, x4142, x0000]`, no mismatch against the reference OS in output, R0 or R1-R6), by 20,000 random strings of length 0-199 with NULs in either byte at both latencies, and by the exact-cycle model in `tests/bundled_os.rs` at lengths 0, 1, 2, 5, 7, 8, 9, 16 and 17 for every class, at the 255 non-zero high bytes, and at the three terminators.
 - **Open.** No lower bound is proven for the fixed cost (19M + A) or for the amortized pointer and back-edge cost ((A + B)/8 per word against the bound's A/64); the limit of eight copies is a consequence of this placement's branch reach, not a proven optimum over all placements.
