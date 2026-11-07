@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Usage: scripts/capture-bundled-os-fixture [path/to/reference/lc3tools/lc3as]
+# Input: src/bundled_os.asm; requires the native lc3as from the git-excluded
+# reference/ folder (default: reference/lc3tools/lc3as under the repository).
+# Output: tests/fixtures/bundled_os.obj. lc3as writes .obj and .sym beside its
+# input, so it runs in a temporary directory and only the .obj is copied. The
+# capture fails unless lc3as reports no errors and prints nothing but its
+# two pass banners and their zero-error lines (so no warnings).
+set -euo pipefail
+
+if (( $# > 1 )); then
+    printf 'Usage: %s [path/to/reference/lc3tools/lc3as]\n' "$0" >&2
+    exit 1
+fi
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+assembler="${1:-"$repo_root/reference/lc3tools/lc3as"}"
+if [[ ! -x "$assembler" ]]; then
+    printf 'Missing executable: %s; supply the path to reference/lc3tools/lc3as\n' "$assembler" >&2
+    exit 1
+fi
+assembler="$(realpath -- "$assembler")"
+capture_dir="$(mktemp -d)"
+trap 'rm -rf -- "$capture_dir"' EXIT
+cd -- "$capture_dir"
+
+cp -- "$repo_root/src/bundled_os.asm" bundled_os.asm
+"$assembler" bundled_os.asm > assembler.log 2>&1
+expected=$'STARTING PASS 1\n0 errors found in first pass.\nSTARTING PASS 2\n0 errors found in second pass.'
+if [[ "$(cat assembler.log)" != "$expected" ]]; then
+    printf 'lc3as reported diagnostics for src/bundled_os.asm:\n' >&2
+    cat assembler.log >&2
+    exit 1
+fi
+mkdir -p -- "$repo_root/tests/fixtures"
+cp -- bundled_os.obj "$repo_root/tests/fixtures/bundled_os.obj"
