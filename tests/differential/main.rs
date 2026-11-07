@@ -80,7 +80,7 @@ struct Tally {
 
 /// Compares every fixture in `directory` selected by `select`, panicking with every
 /// mismatch found. A fixture whose OS file is absent is skipped with a message.
-fn compare_directory(directory: &Path, select: fn(&Path, &Expected) -> bool) -> Tally {
+fn compare_directory(directory: &Path, select: fn(&Expected) -> bool) -> Tally {
     let mut tally = Tally {
         compared: 0,
         skipped: 0,
@@ -89,7 +89,7 @@ fn compare_directory(directory: &Path, select: fn(&Path, &Expected) -> bool) -> 
     let mut absent: HashSet<PathBuf> = HashSet::new();
     for path in case_files(directory) {
         let fixture = read_fixture(&path);
-        if !select(&path, &fixture.expected) {
+        if !select(&fixture.expected) {
             continue;
         }
         let (os_path, what) = match &fixture.os {
@@ -128,29 +128,19 @@ fn compare_directory(directory: &Path, select: fn(&Path, &Expected) -> bool) -> 
     tally
 }
 
-/// The reference OS's undefined-trap routine jumps into its halt routine instead of
-/// executing `TRAP x25`, so the halt message lands in this project's program output
-/// but is cut off by the `--- halting the LC-3 ---` marker rule (ADR 0007 claims they agree).
-const UNDEFINED_TRAP_FIXTURE: &str = "console-undefined-trap-reaches-halt.case";
-
-fn is_undefined_trap_fixture(path: &Path) -> bool {
-    path.file_name()
-        .is_some_and(|name| name == UNDEFINED_TRAP_FIXTURE)
+fn is_halted(expected: &Expected) -> bool {
+    matches!(expected, Expected::Halted(_))
 }
 
-fn is_halted(path: &Path, expected: &Expected) -> bool {
-    matches!(expected, Expected::Halted(_)) && !is_undefined_trap_fixture(path)
-}
-
-fn is_illegal(_: &Path, expected: &Expected) -> bool {
+fn is_illegal(expected: &Expected) -> bool {
     matches!(expected, Expected::IllegalInstruction { .. })
 }
 
-fn is_exhausted(_: &Path, expected: &Expected) -> bool {
+fn is_exhausted(expected: &Expected) -> bool {
     matches!(expected, Expected::InputExhausted { .. })
 }
 
-fn assert_committed_group(select: fn(&Path, &Expected) -> bool) {
+fn assert_committed_group(select: fn(&Expected) -> bool) {
     let tally = compare_directory(&committed_fixtures(), select);
     assert!(
         tally.compared + tally.skipped > 0,
@@ -174,19 +164,13 @@ fn input_exhaustion_stops_where_lc3sim_stops() {
 }
 
 #[test]
-#[ignore = "divergence: program output keeps the halt message after an undefined trap"]
-fn undefined_trap_program_output_ends_before_the_halt_message() {
-    assert_committed_group(|path, _| is_undefined_trap_fixture(path));
-}
-
-#[test]
 fn local_fixtures_match_lc3sim() {
     let directory = local_fixtures();
     if !directory.is_dir() {
         skip("local differential fixtures folder", &directory);
         return;
     }
-    let tally = compare_directory(&directory, |_, _| true);
+    let tally = compare_directory(&directory, |_| true);
     assert!(
         tally.compared + tally.skipped > 0,
         "the local fixtures folder {} holds no cases",
