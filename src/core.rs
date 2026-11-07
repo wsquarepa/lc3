@@ -204,7 +204,7 @@ impl State {
     }
 
     /// Executes with fixed fetch-address owners and optional once-per-PC triggers.
-    /// Requires one owner per address, each below `owner_count`. Returns halted
+    /// Each owner must be below `owner_count`. Returns halted
     /// state, total cycles and owner buckets, or a cap, decode or input failure.
     /// Trigger checks compile out when `WITH_TRIGGERS` is false; otherwise a
     /// 64 KiB pending table gives constant-time checks between trigger batches.

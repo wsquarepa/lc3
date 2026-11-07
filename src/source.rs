@@ -22,8 +22,10 @@ impl Image {
     }
 }
 
+/// A source format accepted by [`load`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
+    /// Binary object file: a big-endian origin word followed by big-endian words.
     Obj,
     /// UTF-8 lc3as assembly with case-insensitive mnemonics and labels.
     Asm,
@@ -33,23 +35,32 @@ pub enum Format {
     Hex,
 }
 
+/// Whether a [`Diagnostic`] rejects the source or only notes something about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Severity {
+    /// The source is rejected and no image is produced.
     Error,
+    /// The source loads; the note is returned in [`Loaded::warnings`].
     Warning,
 }
 
+/// A problem found while loading a source, tied to a line where one applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// Whether the source was rejected.
     pub severity: Severity,
     /// One-based source line, or `None` when no source line applies.
     pub line: Option<u32>,
+    /// Actionable text that names the offending input and what to supply instead.
     pub message: String,
 }
 
+/// A successfully loaded source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Loaded {
+    /// The words the source places in memory.
     pub image: Image,
+    /// Warning diagnostics, in source order; empty for every format but `.asm`.
     pub warnings: Vec<Diagnostic>,
 }
 

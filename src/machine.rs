@@ -102,6 +102,8 @@ impl Default for Case {
     }
 }
 
+/// The result of one run: it halted, or it failed for exactly one reason.
+/// Returned by [`run`]; a failed boot is reported by [`prepare`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Halted(Halted),
@@ -128,8 +130,11 @@ pub struct WordCounts {
     pub os: usize,
 }
 
+/// The final state of a run stopped by a write to the machine control register
+/// that clears its clock-enable bit (bit 15).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Halted {
+    /// Register file as it stood after the halting instruction completed.
     pub registers: Registers,
     /// All 65,536 backing words, with the machine control register reading x8000.
     /// A KBDR read stores its zero-extended input byte; pokes may store any word.
@@ -148,18 +153,27 @@ pub struct Halted {
     /// A direct JSR into that address also starts halt output there. Empty when
     /// the run writes the machine control register without either event.
     pub halt_output: Vec<u8>,
+    /// Total FSM cycles of the run, the halting instruction included and boot excluded.
     pub cycles: u64,
     /// Full instruction costs by fetch address owner, summing to `cycles`.
     pub attribution: Attribution,
     /// Source word counts for all images and the OS, independent of overlap.
     pub word_counts: WordCounts,
+    /// The memory latency the run was prepared with.
     pub mem_latency: NonZeroU32,
 }
 
+/// The LC-3 register file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
+    /// General-purpose registers R0 to R7, indexed by register number.
     pub r: [u16; 8],
+    /// Address from which the next instruction is fetched.
     pub pc: u16,
+    /// Processor status. Only the condition codes are maintained by execution:
+    /// N is bit 2, Z is bit 1 and P is bit 0, exactly one of them set after an
+    /// instruction that writes a register; the other bits are never changed by
+    /// execution and pokes may store any value.
     pub psr: u16,
 }
 
@@ -170,6 +184,8 @@ pub enum Failure {
         /// Address of the reading instruction, including instruction fetch.
         pc: u16,
     },
+    /// The next instruction's cost would have made the run's total reach or
+    /// exceed `Case::cycle_cap`; that instruction is not executed or counted.
     CycleCapReached,
     /// A TRAP under the bundled OS read xFFFE from its vector-table entry.
     /// The failing TRAP's cost is checked against the cap but is not counted.
@@ -177,9 +193,13 @@ pub enum Failure {
         /// Low byte of the executing TRAP instruction.
         vector: u8,
     },
+    /// The word fetched at `pc` cannot execute; no cycles are charged for it.
     IllegalInstruction {
+        /// Address the word was fetched from.
         pc: u16,
+        /// The fetched word.
         word: u16,
+        /// Why the word cannot execute.
         kind: IllegalKind,
     },
 }
@@ -195,8 +215,11 @@ pub enum IllegalKind {
     MalformedEncoding,
 }
 
+/// A failure of the OS's boot, carried by [`PrepareError::Boot`]. No run was started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootFailure {
+    /// Why boot stopped: the boot cycle cap, an illegal word, or a KBDR read
+    /// (boot has no console input).
     pub reason: Failure,
 }
 

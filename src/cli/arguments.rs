@@ -11,17 +11,23 @@ const STDIN_PATH: &str = "-";
 const HELP_FLAG: &str = "--help";
 const JSON_FLAG: &str = "--json";
 
+/// What the one path argument names, decided by its spelling alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     /// A run file read from stdin.
     RunFileOnStdin,
+    /// A path ending in `.toml`.
     RunFile(PathBuf),
+    /// A path with one of the four source extensions, run with the default case.
     BareSource(PathBuf),
 }
 
+/// A parsed command line: the only two things `lc3` can be asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Invocation {
+    /// `--help` given alone.
     Help,
+    /// Run `entry`; `json` selects the JSON report over console bytes plus a stderr summary.
     Run { entry: Entry, json: bool },
 }
 

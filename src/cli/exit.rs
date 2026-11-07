@@ -43,6 +43,8 @@ pub enum Finish {
 }
 
 impl Finish {
+    /// The process exit code for this finish: 0 for a halt, 3 for any boot
+    /// failure, and a code per run failure reason (10 to 13).
     pub fn exit(&self) -> Exit {
         match self {
             Finish::Ran(Outcome::Halted(_)) => Exit::Halted,

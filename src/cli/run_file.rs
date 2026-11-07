@@ -122,7 +122,9 @@ enum Scalar {
 #[derive(Debug)]
 struct Words(Vec<Scalar>);
 
-/// A TOML table whose entries keep document order, so later pokes win.
+/// A TOML table's entries as a list of key and value pairs, so that the keys
+/// can be validated one by one. TOML tables are unordered and duplicate keys
+/// are rejected, so no order is promised; overlapping pokes are rejected later.
 struct Pairs<T>(Vec<(String, T)>);
 
 struct ScalarVisitor;
