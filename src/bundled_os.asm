@@ -40,7 +40,7 @@ BOOT_FILL
 	STR R1,R0,#3
 	LEA R1,TRAP_PUTSP
 	STR R1,R0,#4
-	LEA R1,TRAP_HALT
+	LD R1,HALT_VECTOR	; TRAP_HALT is beyond LEA reach of boot
 	STR R1,R0,#5
 	AND R0,R0,#0
 	STR R0,R0,#-2		; x0000 - 2 = xFFFE: MCR <- 0 halts boot
@@ -68,92 +68,6 @@ TRAP_IN
 	LD R7,SAVE_R7
 	RET
 
-; PUTS: print the low byte of each word from M[R0] up to the first x0000
-; word; R0 restored. Unrolled 15 words per block with one pointer ADD per
-; block. Loop invariants: R0 = start of the current block, R7 = the word just
-; loaded (already known non-zero inside the block), R1 = DDR_NL.
-; An empty string exits on the taken BRz so that every non-empty string gets
-; the cheaper not-taken branch.
-TRAP_PUTS
-	ST R7,SAVE_R7
-	LDR R7,R0,#0
-	BRz PUTS_EMPTY
-	ST R0,SAVE_R0
-	ST R1,SAVE_R1
-	LD R1,DDR_NL
-PUTS_BLOCK
-	STR R7,R1,#-4
-	LDR R7,R0,#1
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#2
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#3
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#4
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#5
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#6
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#7
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#8
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#9
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#10
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#11
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#12
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#13
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#14
-	BRz PUTS_END
-	STR R7,R1,#-4
-	ADD R0,R0,#15
-	LDR R7,R0,#0
-	BRnp PUTS_BLOCK		; the next block's first check doubles as the back edge
-PUTS_END
-	LD R1,SAVE_R1
-	LD R0,SAVE_R0
-PUTS_EMPTY
-	LD R7,SAVE_R7
-	RET
-
-; Constants and spill slots, placed between the routines so that every LD and
-; ST that uses them is in PC-relative range. TRAP routines never call each
-; other, so they share one set of spill slots.
-DDR_NL		.FILL xFE0A
-KBDR_PTR	.FILL xFE02
-DDR_PTR		.FILL xFE06
-LOW_MASK	.FILL x00FF
-HIGH_MASK	.FILL x1F00
-HIGH_TABLE_PTR	.FILL HIGH_TABLE
-UNKNOWN_TRAP	.FILL xFFFE
-VECTOR_COUNT	.FILL #256
-FIRST_VECTOR	.FILL x0020
-SAVE_R0		.BLKW 1
-SAVE_R1		.BLKW 1
-SAVE_R2		.BLKW 1
-SAVE_R3		.BLKW 1
-SAVE_R4		.BLKW 1
-SAVE_R5		.BLKW 1
-SAVE_R7		.BLKW 1
 
 ; PUTSP: print each word's low byte, then its high byte, stopping at the first
 ; NUL byte in either position; R0 restored.
@@ -270,13 +184,258 @@ PUTSP_EXIT
 	LD R7,SAVE_R7
 	RET
 
+; Constants and spill slots, placed between the routines so that every LD and
+; ST that uses them is in PC-relative range. TRAP routines never call each
+; other, so they share one set of spill slots.
+DDR_NL		.FILL xFE0A
+KBDR_PTR	.FILL xFE02
+DDR_PTR		.FILL xFE06
+LOW_MASK	.FILL x00FF
+HIGH_MASK	.FILL x1F00
+HIGH_TABLE_PTR	.FILL HIGH_TABLE
+PUTS_STRIDE	.FILL #64
+UNKNOWN_TRAP	.FILL xFFFE
+VECTOR_COUNT	.FILL #256
+FIRST_VECTOR	.FILL x0020
+HALT_VECTOR	.FILL TRAP_HALT
+SAVE_R0		.BLKW 1
+SAVE_R1		.BLKW 1
+SAVE_R2		.BLKW 1
+SAVE_R3		.BLKW 1
+SAVE_R4		.BLKW 1
+SAVE_R5		.BLKW 1
+SAVE_R7		.BLKW 1
+
+
+; PUTS: print the low byte of each word from M[R0] up to the first x0000
+; word; R0 restored. The loop body handles 64 words with one pointer ADD of
+; the stride R2 = 64, using LDR offsets -32..31 around R0; 64 words is the
+; most one direct back edge can span (193 words <= 256). Loop invariants:
+; R7 = the word just loaded (already known non-zero), R1 = DDR_NL, and the
+; next word is at R0 + its offset in the body. An empty string exits on the
+; taken BRz so that every non-empty string gets the cheaper not-taken branch.
+TRAP_PUTS
+	ST R7,SAVE_R7
+	LDR R7,R0,#0
+	BRz PUTS_EMPTY
+	ST R0,SAVE_R0
+	ST R1,SAVE_R1
+	ST R2,SAVE_R2
+	LD R1,DDR_NL
+	LD R2,PUTS_STRIDE
+PUTS_LOOP
+	STR R7,R1,#-4		; word at offset 0
+	LDR R7,R0,#1
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#2
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#3
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#4
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#5
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#6
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#7
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#8
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#9
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#10
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#11
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#12
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#13
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#14
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#15
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#16
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#17
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#18
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#19
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#20
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#21
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#22
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#23
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#24
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#25
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#26
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#27
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#28
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#29
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#30
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#31
+	BRz PUTS_END
+	STR R7,R1,#-4
+	ADD R0,R0,R2		; next 64-word window: offsets -32..31
+	LDR R7,R0,#-32
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-31
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-30
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-29
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-28
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-27
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-26
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-25
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-24
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-23
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-22
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-21
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-20
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-19
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-18
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-17
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-16
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-15
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-14
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-13
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-12
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-11
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-10
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-9
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-8
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-7
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-6
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-5
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-4
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-3
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-2
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-1
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#0
+	BRnp PUTS_LOOP		; the next iteration's first check is the back edge
+PUTS_END
+	LD R2,SAVE_R2
+	LD R1,SAVE_R1
+	LD R0,SAVE_R0
+PUTS_EMPTY
+	LD R7,SAVE_R7
+	RET
+
 ; HALT: print "\n--- halted ---\n", then halt with R0 = x0000 (as the
 ; reference OS leaves it) and R1-R6 untouched. R7 = DDR_NL serves as the device
 ; base and as both linefeeds; R0 carries every other character. LEA targets
 ; are the CHAR_* addresses below, chosen for their low bytes; the other
-; characters are ADD steps from the previous one.
+; characters are ADD steps from the previous one. The padding before it puts
+; HALT within LEA reach of those addresses, so HALT keeps its own copy of
+; DDR_NL.
+	.BLKW x8A
+HALT_BASE	.FILL xFE0A
 TRAP_HALT
-	LD R7,DDR_NL
+	LD R7,HALT_BASE
 	STR R7,R7,#-4		; '\n'
 	LEA R0,CHAR_DASH
 	STR R0,R7,#-4		; '-'
@@ -306,16 +465,6 @@ TRAP_HALT
 	AND R0,R0,#0
 	STR R0,R0,#-2		; x0000 - 2 = xFFFE: MCR <- 0 halts
 
-; Address constants for HALT's LEAs: only the low byte of each address
-; matters (x20 ' ', x2D '-', x68 'h'). The padding pins them to x0320,
-; x032D and x0368; tests/bundled_os.rs checks the printed message.
-	.BLKW x43
-CHAR_SPACE	.BLKW 1
-	.BLKW x0C
-CHAR_DASH	.BLKW 1
-	.BLKW x3A
-CHAR_H		.BLKW 1
-	.BLKW x97
 
 ; HIGH_TABLE: row n (n = W[12:8]) starts at HIGH_TABLE + n * x100; entry t
 ; (t = W[15:13]) holds h = t * x20 + n. Rows sit at x0400-x2307, inside the
@@ -329,7 +478,16 @@ HIGH_TABLE
 	.FILL xA0
 	.FILL xC0
 	.FILL xE0
-	.BLKW xF8
+; Address constants for HALT's LEAs: only the low byte of each address
+; matters (x20 ' ', x2D '-', x68 'h'). They sit in the gap after the first
+; table row at x0420, x042D and x0468; tests/bundled_os.rs checks the message.
+	.BLKW x18
+CHAR_SPACE	.BLKW 1
+	.BLKW x0C
+CHAR_DASH	.BLKW 1
+	.BLKW x3A
+CHAR_H		.BLKW 1
+	.BLKW x97
 	.FILL x01
 	.FILL x21
 	.FILL x41

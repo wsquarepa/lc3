@@ -218,19 +218,22 @@ fn in_echoes_the_byte_and_a_linefeed_without_the_prompt_in_99_cycles() {
     assert_eq!(7 * Costs::at(1).m + Costs::at(1).a, 54);
 }
 
-/// PUTS cost for a string of `len` non-zero words: 15-word blocks with one
-/// pointer ADD each; an empty string takes the entry branch.
+/// PUTS cost for a string of `len` non-zero words: a 64-word loop body with
+/// one stride ADD, entered at offset 0, so the ADDs fall before words 32, 96,
+/// 160, ...; an empty string takes the entry branch.
 fn puts_cost(len: u64, c: Costs) -> u64 {
     if len == 0 {
         return 4 * c.m + c.a + c.b;
     }
-    let taken = (len - 1) / 15 + u64::from(!len.is_multiple_of(15));
-    9 * c.m + 2 * c.a + len * (2 * c.m + c.a) + (c.b - c.a) * taken + c.a * (len / 15)
+    let taken = (len - 1) / 64 + u64::from(!len.is_multiple_of(64));
+    12 * c.m + 2 * c.a + len * (2 * c.m + c.a) + (c.b - c.a) * taken + c.a * ((len + 32) / 64)
 }
 
 #[test]
 fn puts_prints_low_bytes_until_a_zero_word_at_34_cycles_per_character() {
-    for len in [0, 1, 2, 3, 14, 15, 16, 29, 30, 31, 45, 46, 60] {
+    for len in [
+        0, 1, 2, 31, 32, 33, 63, 64, 65, 95, 96, 97, 127, 128, 129, 200,
+    ] {
         let mut data: Vec<u16> = (0..len)
             .map(|i| (i as u16) << 8 | (0x41 + i as u16 % 26))
             .collect();
@@ -250,8 +253,8 @@ fn puts_prints_low_bytes_until_a_zero_word_at_34_cycles_per_character() {
     }
     let c = Costs::at(4);
     assert_eq!(
-        [0, 1, 15, 16].map(|len| puts_cost(len, c)),
-        [69, 168, 651, 687]
+        [0, 1, 32, 64, 65].map(|len| puts_cost(len, c)),
+        [69, 207, 1269, 2356, 2392]
     );
 }
 
