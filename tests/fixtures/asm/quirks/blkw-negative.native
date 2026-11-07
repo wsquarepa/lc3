@@ -3,6 +3,8 @@ errors=false
 warnings=false
 obj_bytes=131072
 sym_exists=true
+obj_origin=x3000
+obj_zero_words=65535
 [stdout]
 STARTING PASS 1
 0 errors found in first pass.

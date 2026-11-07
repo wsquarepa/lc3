@@ -23,6 +23,7 @@ source lacks one of the markers that delimit its verbatim pieces. The file is
 written only after generation succeeds, so a failure leaves it unchanged.
 """
 
+from collections.abc import Callable, Sequence
 import sys
 
 
@@ -33,21 +34,22 @@ class LayoutError(Exception):
 class MarkerError(Exception):
     """A marker that delimits a verbatim piece of the source is missing."""
 
-UNROLL = 8
-GAP_WORDS = 0xF8
-ROW_STRIDE = 0x100
-FIRST_GAP = 0x0209
-CHAIN_GAP = 28
-SLOTS = 0x1EE0
-SIDE_GAPS = {27: (0, 2), 29: (4, UNROLL)}
-MNEMONICS = {
+
+UNROLL: int = 8
+GAP_WORDS: int = 0xF8
+ROW_STRIDE: int = 0x100
+FIRST_GAP: int = 0x0209
+CHAIN_GAP: int = 28
+SLOTS: int = 0x1EE0
+SIDE_GAPS: dict[int, tuple[int, int]] = {27: (0, 2), 29: (4, UNROLL)}
+MNEMONICS: set[str] = {
     "ADD", "AND", "NOT", "LD", "LDR", "LDI", "LEA", "ST", "STR", "STI", "BR", "BRN", "BRZ",
     "BRP", "BRNZ", "BRNP", "BRZP", "BRNZP", "JMP", "RET", "JSR", "JSRR", "TRAP", "RTI",
     "GETC", "OUT", "PUTS", "IN", "PUTSP", "HALT",
 }
 
 
-def words(block):
+def words(block: str) -> int:
     """Number of words an asm block occupies: one per instruction or .FILL, n per .BLKW."""
     count = 0
     for line in block.split("\n"):
@@ -67,11 +69,11 @@ def words(block):
     return count
 
 
-def gap_start(n):
+def gap_start(n: int) -> int:
     return FIRST_GAP + ROW_STRIDE * n
 
 
-def row(n):
+def row(n: int) -> str:
     return "\n".join(f"\t.FILL x{t * 0x20 + n:02X}" for t in range(8))
 
 
@@ -186,11 +188,11 @@ SAVE_R5		.BLKW 1
 SAVE_R7		.BLKW 1"""
 
 
-def next_label(k):
+def next_label(k: int) -> str:
     return f"WORD_{k + 1}" if k + 1 < UNROLL else "NEXT_BLOCK"
 
 
-def leaf(k, t, nxt, exit_label, fall=False):
+def leaf(k: int, t: int, nxt: str, exit_label: str, fall: bool = False) -> str:
     """Leaf for class t of copy k; falls through into the next copy when `fall`."""
     out = [f"L{t:03b}_{k}", "\tAND R7,R7,R3", "\tADD R7,R7,R4", f"\tLDR R7,R7,#{t}"]
     if t == 0:
@@ -201,7 +203,7 @@ def leaf(k, t, nxt, exit_label, fall=False):
     return "\n".join(out)
 
 
-def chain_copy(k, exit_label):
+def chain_copy(k: int, exit_label: str) -> str:
     return "\n".join([
         f"WORD_{k}",
         f"\tLDR R7,R0,#{k}\t\t; sign = W[15]",
@@ -217,7 +219,7 @@ def chain_copy(k, exit_label):
     ])
 
 
-def side(k, exit_label):
+def side(k: int, exit_label: str) -> str:
     """All non-fallthrough code of copy k: 47 words."""
     nxt = next_label(k)
     return "\n".join([
@@ -245,7 +247,7 @@ def side(k, exit_label):
     ])
 
 
-def stub(name):
+def stub(name: str) -> str:
     """Exit: restore R0-R5 and R7 from the slots off R3, then return."""
     return "\n".join([
         name,
@@ -254,7 +256,7 @@ def stub(name):
     ])
 
 
-def emit_gap(n, blocks, pre_pad=0, pinned=None):
+def emit_gap(n: int, blocks: Sequence[str], pre_pad: int = 0, pinned: dict[str, int] | None = None) -> str:
     """Emit gap n: optional leading pad, the blocks (pinned ones at their address), the pad to the next row, and that row."""
     out = []
     addr = gap_start(n)
@@ -280,15 +282,15 @@ def emit_gap(n, blocks, pre_pad=0, pinned=None):
     return "\n".join(out)
 
 
-def marker_line(lines, description, matches, start=0):
+def marker_line(lines: Sequence[str], description: str, matches: Callable[[str], bool], start: int = 0) -> int:
     """Index of the first line at or after `start` satisfying `matches`; MarkerError when none does."""
     for i in range(start, len(lines)):
         if matches(lines[i]):
             return i
-    raise MarkerError(f"source has no {description} after line {start + 1}")
+    raise MarkerError(f"source has no {description} at or after line {start + 1}")
 
 
-def verbatim_pieces(lines):
+def verbatim_pieces(lines: Sequence[str]) -> tuple[str, str, str]:
     """Header (before .ORIG), HALT block and PUTS block of the current source."""
     i_orig = marker_line(lines, ".ORIG directive", lambda l: l.strip().startswith(".ORIG"))
     i_halt = marker_line(
@@ -303,7 +305,7 @@ def verbatim_pieces(lines):
     )
 
 
-def putsp_gaps():
+def putsp_gaps() -> tuple[str, str, str]:
     """Text of gaps 27, 28 and 29 (each followed by its row), with reach checks."""
     chain = "\n".join(chain_copy(k, "PUTSP_EXIT_A") for k in range(UNROLL))
     next_block = f"NEXT_BLOCK\n\tADD R0,R0,#{UNROLL}\n\tBRnzp WORD_0"
@@ -326,7 +328,7 @@ def putsp_gaps():
     )
 
 
-def generate(source):
+def generate(source: str) -> str:
     lines = source.split("\n")
     header, halt_block, puts_block = verbatim_pieces(lines)
     g27, g28, g29 = putsp_gaps()
@@ -359,7 +361,7 @@ def generate(source):
     return "\n".join(body)
 
 
-def main(argv):
+def main(argv: Sequence[str]) -> None:
     if len(argv) != 2:
         raise SystemExit("usage: bundled_os_generate.py <src/bundled_os.asm>")
     path = argv[1]

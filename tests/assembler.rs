@@ -4,7 +4,7 @@ use std::path::Path;
 use lc3::{Format, load};
 
 #[test]
-fn asm_matches_native_verdicts_and_images_for_every_corpus_source_and_quirk() {
+fn asm_matches_native_records_and_images_for_every_corpus_source_and_quirk() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/asm");
     for directory in [&fixtures, &fixtures.join("quirks")] {
         let mut sources: Vec<_> = fs::read_dir(directory)
@@ -21,47 +21,51 @@ fn asm_matches_native_verdicts_and_images_for_every_corpus_source_and_quirk() {
 }
 
 fn assert_differential_fixture(source: &Path, quirk: bool) {
-    let native = fs::read_to_string(source.with_extension("native")).unwrap();
-    let mut verdict = native.lines();
-    let exit = verdict
+    let record = fs::read_to_string(source.with_extension("native")).unwrap();
+    let mut native = record.lines();
+    let exit = native
         .next()
         .unwrap()
         .strip_prefix("exit=")
         .unwrap()
         .parse::<i32>()
         .unwrap();
-    let errors = verdict
+    let errors = native
         .next()
         .unwrap()
         .strip_prefix("errors=")
         .unwrap()
         .parse::<bool>()
         .unwrap();
-    let warnings = verdict
+    let warnings = native
         .next()
         .unwrap()
         .strip_prefix("warnings=")
         .unwrap()
         .parse::<bool>()
         .unwrap();
-    let obj_bytes = verdict
+    let obj_bytes = native
         .next()
         .unwrap()
         .strip_prefix("obj_bytes=")
         .unwrap()
         .parse::<usize>()
         .unwrap();
-    assert_eq!(verdict.next(), Some("sym_exists=true"));
-    assert!(native.contains("[stdout]\nSTARTING PASS 1\n"));
-    assert!(native.contains("[stderr]\n"));
+    assert_eq!(native.next(), Some("sym_exists=true"));
+    let zero_object = parse_zero_object(&record);
+    assert!(record.contains("[stdout]\nSTARTING PASS 1\n"));
+    assert!(record.contains("[stderr]\n"));
     assert_eq!(exit != 0, errors, "{}", source.display());
     assert_eq!(
         warnings,
-        native.contains("WARNING") || native.contains("multiple .ORIG")
+        record.contains("WARNING") || record.contains("multiple .ORIG")
     );
     let actual = load(Format::Asm, &fs::read(source).unwrap());
     if !errors {
-        let bytes = fs::read(source.with_extension("obj")).unwrap();
+        let bytes = match zero_object {
+            Some(bytes) => bytes,
+            None => fs::read(source.with_extension("obj")).unwrap(),
+        };
         assert_eq!(bytes.len(), obj_bytes);
         let expected = load(Format::Obj, &bytes).unwrap();
         if let Ok(loaded) = &actual {
@@ -72,7 +76,7 @@ fn assert_differential_fixture(source: &Path, quirk: bool) {
                 source.display()
             );
         }
-    } else if native.contains("errors found in first pass") && !native.contains("STARTING PASS 2") {
+    } else if record.contains("errors found in first pass") && !record.contains("STARTING PASS 2") {
         assert_eq!(obj_bytes, 0, "pass-1 error: {}", source.display());
     } else {
         assert!(obj_bytes > 0, "partial image: {}", source.display());
@@ -87,10 +91,21 @@ fn assert_differential_fixture(source: &Path, quirk: bool) {
         );
         "accept".to_owned()
     };
-    assert_expected_verdict(&actual, &expected, source);
+    assert_expected_diagnostics(&actual, &expected, source);
 }
 
-fn assert_expected_verdict(
+/// Object bytes of an lc3as output that is one origin followed by zero words, rebuilt from the
+/// record's `obj_origin=` and `obj_zero_words=` lines so the large file is never committed.
+fn parse_zero_object(record: &str) -> Option<Vec<u8>> {
+    let field = |key: &str| record.lines().find_map(|line| line.strip_prefix(key));
+    let origin = u16::from_str_radix(field("obj_origin=x")?, 16).unwrap();
+    let zero_words = field("obj_zero_words=")?.parse::<usize>().unwrap();
+    let mut bytes = origin.to_be_bytes().to_vec();
+    bytes.resize(2 + 2 * zero_words, 0);
+    Some(bytes)
+}
+
+fn assert_expected_diagnostics(
     actual: &Result<lc3::Loaded, Vec<lc3::Diagnostic>>,
     expected: &str,
     source: &Path,
