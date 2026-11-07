@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+"""Regenerates the differential fixtures by running the reference lc3sim.
+
+Usage: scripts/capture-differential-fixtures
+
+Requirements: Python 3 (stdlib only), docker, and the local git-excluded reference/
+folder of the main checkout containing bin/lc3tool plus the native lc3tools/lc3as and
+lc3tools/lc3convert (the worktree finds the main checkout through the git common dir).
+Each lc3sim run takes under a second, but exhaustion cases search for the failing
+instruction by repeated runs, so a full capture takes a few minutes.
+
+Inputs, per fixture directory:
+  cases.json   the manifest (format below)
+  *.asm, *.bin, *.hex   program sources named by the manifest
+Directories processed:
+  tests/fixtures/differential/   committed; programs written for this repository
+  <main checkout>/reference/fixtures/   local and git-excluded; skipped with a message
+                                        on stderr when its cases.json is absent
+Outputs, in the same directory as each manifest: one <stem>.obj per source (reference
+lc3as, or lc3convert for .bin and .hex) and one <case>.case per manifest case. Stale
+.case and .obj files not produced by the manifest are deleted.
+
+Manifest: {"cases": [case, ...]} where a case has
+  name      string, also the .case file stem
+  os        "reference", or a source name (.asm) of an OS that lc3sim loads over the
+            reference OS with `file`; this project instead boots that OS alone (ADR
+            0004), so the case's memory baseline leaves the reference OS out
+  image     source name of the single program
+  expect    "halted", "illegal-instruction" or "input-exhausted"; capture fails when
+            lc3sim behaves otherwise
+  input     optional string (code points 0-255 are bytes) the program reads from the
+            console, defaults to empty
+  pokes     optional [[address, word], ...] hex memory writes before the run
+  trigger   optional {"pc": hex, "before": string, "pokes": [[address, word], ...]}:
+            lc3sim sets a breakpoint at pc and continues, the console bytes in
+            `before` are read by the program up to the breakpoint, then the pokes are
+            written and execution continues with `input`
+A program must read exactly the bytes in `input` (and `before`); leftover bytes would
+be parsed by lc3sim as commands, and capture fails when that happens.
+
+How lc3sim is driven (a script run with `option device off` and `option stdin off`):
+  option device off, [file os.obj], file image.obj, m <poke>..., [b s <pc>],
+  option stdin off, c, [<before>, m <poke>..., c], <input>,
+  then a line that is not a command, printreg and two dump commands covering all of
+  memory except the device registers xFE00-xFE08 (reading KBDR would consume input).
+Because the console input is the script's own bytes after `c`, the unknown-command line
+after them separates the program output from the state dump even when the run halts by
+a machine control register write without printing a halt message.
+
+Program output is the text between lc3sim's "Will not use stdin" line and the first
+"--- halting the LC-3 ---" (or the unknown-command line when there is none, less the
+register dump lc3sim prints when the machine control register stops it), with the
+breakpoint stop block removed for trigger cases, trimmed of the ASCII whitespace
+that Rust's trim_ascii strips. This is the marker rule ADR 0007 describes.
+
+lc3sim reports no PC when input runs out: it prints "LC-3 read past end of input
+stream." and exits with status 3. The PC is measured instead by stepping: the script
+alternates `step` commands with the program's input bytes, so the first step whose
+read finds the script at end of file is the failing read, and `printreg` before that
+step shows its address. Each step count is found by a linear scan over whole runs.
+
+Case file format (line based, hex is uppercase without prefix, '#' lines are comments):
+  os reference | os <file>.obj      the OS, relative to the case file's directory
+  image <file>.obj
+  input <hex bytes>                 every console byte the program reads (a trigger's
+                                    `before` first); omitted when empty
+  poke <address> <word>             any number of lines
+  trigger <pc> <address>=<word>...  at most one line
+  halted | illegal <pc> <word> | input-exhausted <pc>
+  registers <R0> ... <R7> <PC>      only after halted
+  output <hex bytes>                trimmed program output, only after halted
+  memory <address> <word>...        only after halted: runs of words that differ from
+                                    the loaded OS image overlaid by the program image
+                                    (zero where neither covers an address); the
+                                    registers xFE00-xFE08 are never recorded
+"""
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+DEVICE_FIRST = 0xFE00
+DEVICE_LAST = 0xFE08
+PROGRAM_START = b"Will not use stdin for LC-3 console input during script execution.\n"
+HALT_MARKER = b"--- halting the LC-3 ---"
+UNKNOWN_COMMAND = b"Unknown command.  Type 'h' for help.\n"
+END_OF_RUN = b"zzz-end-of-run\n"
+EXHAUSTED = b"LC-3 read past end of input stream.\n"
+EXHAUSTED_STATUS = 3
+STOP_STATE = re.compile(rb"PC=x[0-9A-F]{4} IR=x[0-9A-F]{4} PSR=x[0-9A-F]{4} [^\n]*\nR0=[^\n]*\n[^\n]*\n\Z")
+ILLEGAL = re.compile(rb"Illegal instruction at x([0-9A-F]{4})!\n")
+REGISTER_DUMP = re.compile(
+    rb"PC=x([0-9A-F]{4}) IR=x([0-9A-F]{4}) PSR=x[0-9A-F]{4} [^\n]*\n"
+    + b" ".join(rb"R%d=x([0-9A-F]{4})" % n for n in range(8))
+)
+DUMP_ROW = re.compile(rb"^([0-9A-F]{4}): ", re.M)
+DUMP_COLUMNS = 12
+DUMP_COLUMN_WIDTH = 5
+DUMP_FIRST_COLUMN = 6
+MEMORY_LINE_WORDS = 16
+RUN_TIMEOUT_SECONDS = 120
+MAX_STEPS = 2000
+ASCII_WHITESPACE = b" \t\n\r\x0c"
+
+
+class CaptureError(Exception):
+    """A fixture could not be captured; the message names the case and the evidence."""
+
+
+@dataclass(frozen=True)
+class Tools:
+    lc3tool: Path
+    lc3as: Path
+    lc3convert: Path
+
+
+@dataclass(frozen=True)
+class Trigger:
+    pc: int
+    before: bytes
+    pokes: list[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class Case:
+    name: str
+    os: str
+    image: str
+    expect: str
+    input: bytes
+    pokes: list[tuple[int, int]]
+    trigger: Trigger | None
+
+
+@dataclass(frozen=True)
+class Registers:
+    r: list[int]
+    pc: int
+    ir: int
+
+
+@dataclass(frozen=True)
+class Observation:
+    kind: str
+    registers: Registers | None
+    output: bytes
+    memory: dict[int, int]
+
+
+def hex_pair(pair: list[str]) -> tuple[int, int]:
+    return int(pair[0], 16), int(pair[1], 16)
+
+
+def parse_case(raw: dict) -> Case:
+    trigger = raw.get("trigger")
+    return Case(
+        name=raw["name"],
+        os=raw["os"],
+        image=raw["image"],
+        expect=raw["expect"],
+        input=raw.get("input", "").encode("latin-1"),
+        pokes=[hex_pair(pair) for pair in raw.get("pokes", [])],
+        trigger=None
+        if trigger is None
+        else Trigger(
+            pc=int(trigger["pc"], 16),
+            before=trigger.get("before", "").encode("latin-1"),
+            pokes=[hex_pair(pair) for pair in trigger["pokes"]],
+        ),
+    )
+
+
+def main_checkout() -> Path:
+    here = Path(__file__).resolve().parent.parent
+    common = subprocess.run(
+        ["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return Path(common).parent
+
+
+def find_tools(reference: Path) -> Tools:
+    tools = Tools(
+        lc3tool=reference / "bin" / "lc3tool",
+        lc3as=reference / "lc3tools" / "lc3as",
+        lc3convert=reference / "lc3tools" / "lc3convert",
+    )
+    for tool in (tools.lc3tool, tools.lc3as, tools.lc3convert):
+        if not tool.is_file():
+            raise CaptureError(f"reference tool not found at {tool}")
+    return tools
+
+
+def run_checked(command: list[str], cwd: Path) -> None:
+    done = subprocess.run(command, cwd=cwd, capture_output=True)
+    if done.returncode != 0:
+        raise CaptureError(
+            f"{command} exited {done.returncode} in {cwd}: "
+            f"{done.stdout.decode('latin-1')}{done.stderr.decode('latin-1')}"
+        )
+
+
+def build_object(source: Path, tools: Tools) -> bytes:
+    with tempfile.TemporaryDirectory() as scratch_name:
+        scratch = Path(scratch_name)
+        shutil.copy(source, scratch / source.name)
+        if source.suffix == ".asm":
+            run_checked([str(tools.lc3as), source.name], scratch)
+        elif source.suffix == ".bin":
+            run_checked([str(tools.lc3convert), source.name], scratch)
+        elif source.suffix == ".hex":
+            run_checked([str(tools.lc3convert), "-b16", source.name], scratch)
+        else:
+            raise CaptureError(f"unsupported source type: {source}")
+        return (scratch / (source.stem + ".obj")).read_bytes()
+
+
+def hex_arg(value: int) -> str:
+    return f"x{value:04x}"
+
+
+def poke_commands(pokes: list[tuple[int, int]]) -> bytes:
+    return "".join(f"m {hex_arg(a)} {hex_arg(w)}\n" for a, w in pokes).encode()
+
+
+def sim_script(case: Case, steps: list[tuple[int, bytes]] | None, final: bytes) -> bytes:
+    """Builds the lc3sim script; `steps` replaces `c` and the input by step runs.
+
+    Each (count, data) in `steps` is `count` step commands followed by `data`, which the
+    last of those steps reads. `final` is appended last."""
+    head = b"option device off\n"
+    if case.os != "reference":
+        head += f"file {Path(case.os).stem}.obj\n".encode()
+    head += f"file {Path(case.image).stem}.obj\n".encode()
+    head += poke_commands(case.pokes)
+    if case.trigger:
+        head += f"b s {hex_arg(case.trigger.pc)}\n".encode()
+    head += b"option stdin off\n"
+    if steps is not None:
+        body = b"".join(b"step\n" * count + data for count, data in steps)
+    elif case.trigger:
+        body = (
+            b"c\n"
+            + case.trigger.before
+            + poke_commands(case.trigger.pokes)
+            + b"c\n"
+            + case.input
+        )
+    else:
+        body = b"c\n" + case.input
+    return head + body + final
+
+
+def run_sim(script: bytes, files: dict[str, bytes], tools: Tools) -> tuple[int, bytes]:
+    with tempfile.TemporaryDirectory() as scratch_name:
+        scratch = Path(scratch_name)
+        for name, data in files.items():
+            (scratch / name).write_bytes(data)
+        (scratch / "script.txt").write_bytes(script)
+        try:
+            done = subprocess.run(
+                [str(tools.lc3tool), "lc3sim", "-s", "script.txt"],
+                cwd=scratch,
+                capture_output=True,
+                timeout=RUN_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise CaptureError(
+                "lc3sim did not stop; stop its container with `docker ps` and "
+                f"`docker kill` before retrying. Script:\n{script.decode('latin-1')}"
+            ) from error
+        return done.returncode, done.stdout
+
+
+def state_dump() -> bytes:
+    return (
+        END_OF_RUN
+        + b"printreg\n"
+        + f"dump {hex_arg(0)} {hex_arg(DEVICE_FIRST - 1)}\n".encode()
+        + f"dump {hex_arg(DEVICE_LAST + 1)} {hex_arg(0xFFFF)}\n".encode()
+    )
+
+
+def trim(data: bytes) -> bytes:
+    return data.strip(ASCII_WHITESPACE)
+
+
+def parse_registers(text: bytes) -> Registers:
+    found = REGISTER_DUMP.search(text)
+    if found is None:
+        raise CaptureError(f"no register dump in: {text[:400]!r}")
+    values = [int(group, 16) for group in found.groups()]
+    return Registers(r=values[2:], pc=values[0], ir=values[1])
+
+
+def parse_dump(text: bytes) -> dict[int, int]:
+    memory: dict[int, int] = {}
+    for row in DUMP_ROW.finditer(text):
+        start = int(row.group(1), 16)
+        line = text[row.start() : text.index(b"\n", row.start())]
+        for column in range(DUMP_COLUMNS):
+            offset = DUMP_FIRST_COLUMN + column * DUMP_COLUMN_WIDTH
+            cell = line[offset : offset + 4].strip()
+            if cell:
+                memory[start + column] = int(cell, 16)
+    return memory
+
+
+def program_region(transcript: bytes, case: Case) -> bytes:
+    if transcript.count(PROGRAM_START) != 1:
+        raise CaptureError(f"{case.name}: expected one start line in {transcript[:600]!r}")
+    region = transcript.split(PROGRAM_START)[1]
+    if case.trigger is None:
+        return region
+    stop = re.compile(
+        rb"The LC-3 hit a breakpoint\.\.\.\n.*?(Wrote x[0-9A-F]{4} to address x[0-9A-F]{4}\.\n){%d}"
+        % len(case.trigger.pokes),
+        re.S,
+    )
+    stripped, replaced = stop.subn(b"", region, count=1)
+    if replaced != 1:
+        raise CaptureError(f"{case.name}: breakpoint stop block not found in {region[:600]!r}")
+    return stripped
+
+
+def observe(case: Case, status: int, transcript: bytes) -> Observation:
+    if status == EXHAUSTED_STATUS:
+        if not transcript.endswith(EXHAUSTED):
+            raise CaptureError(f"{case.name}: exit 3 without the end of input message")
+        return Observation("input-exhausted", None, b"", {})
+    if status != 0:
+        raise CaptureError(f"{case.name}: lc3sim exited {status}: {transcript[-400:]!r}")
+    region = program_region(transcript, case)
+    parts = region.split(UNKNOWN_COMMAND)
+    if len(parts) != 2:
+        raise CaptureError(
+            f"{case.name}: the program left input unread or stopped early; "
+            f"found {len(parts) - 1} unknown commands in {region[-600:]!r}"
+        )
+    console, state = parts
+    registers = parse_registers(state)
+    illegal = ILLEGAL.search(console)
+    if illegal:
+        if int(illegal.group(1), 16) != registers.pc:
+            raise CaptureError(f"{case.name}: illegal instruction address differs from PC")
+        return Observation("illegal-instruction", registers, b"", {})
+    if b"The LC-3 hit a breakpoint" in console:
+        raise CaptureError(f"{case.name}: stopped at a breakpoint again")
+    memory = parse_dump(state)
+    expected_cells = 0x10000 - (DEVICE_LAST - DEVICE_FIRST + 1)
+    if len(memory) != expected_cells:
+        raise CaptureError(f"{case.name}: dump held {len(memory)} words, wanted {expected_cells}")
+    halt = console.find(HALT_MARKER)
+    output = trim(STOP_STATE.sub(b"", console) if halt < 0 else console[:halt])
+    return Observation("halted", registers, output, memory)
+
+
+def exhausts_after(case: Case, files: dict[str, bytes], steps: list[tuple[int, bytes]], count: int, tools: Tools) -> bool:
+    script = sim_script(case, steps + [(count, b"")], b"")
+    status, _ = run_sim(script, files, tools)
+    return status == EXHAUSTED_STATUS
+
+
+def first_exhausting_step(case: Case, files: dict[str, bytes], steps: list[tuple[int, bytes]], tools: Tools) -> int:
+    """Smallest step count after `steps` for which a read finds the script at its end.
+
+    Only the first such count is meaningful: with more steps, the read consumes the
+    following step commands as input, so the outcome is not monotonic in the count and
+    a linear scan is required."""
+    for count in range(1, MAX_STEPS + 1):
+        if exhausts_after(case, files, steps, count, tools):
+            return count
+    raise CaptureError(f"{case.name}: no read past the end within {MAX_STEPS} steps")
+
+
+def exhaustion_pc(case: Case, files: dict[str, bytes], tools: Tools) -> int:
+    if case.trigger or case.pokes:
+        raise CaptureError(f"{case.name}: exhaustion cases take no pokes or trigger")
+    steps: list[tuple[int, bytes]] = []
+    for byte in case.input:
+        steps.append((first_exhausting_step(case, files, steps, tools), bytes([byte])))
+    failing = first_exhausting_step(case, files, steps, tools)
+    script = sim_script(case, steps + [(failing - 1, b"")], END_OF_RUN + b"printreg\n")
+    status, transcript = run_sim(script, files, tools)
+    if status != 0:
+        raise CaptureError(f"{case.name}: pre-read state run exited {status}")
+    return parse_registers(transcript.split(UNKNOWN_COMMAND)[-1]).pc
+
+
+def format_case(case: Case, names: tuple[str, str], seen: Observation, pc: int | None, baseline: list[int]) -> str:
+    lines = [f"# generated by scripts/capture-differential-fixtures for {case.name}"]
+    os_name, image_name = names
+    lines.append("os reference" if case.os == "reference" else f"os {os_name}")
+    lines.append(f"image {image_name}")
+    if case.input or (case.trigger and case.trigger.before):
+        data = (case.trigger.before if case.trigger else b"") + case.input
+        lines.append(f"input {data.hex().upper()}")
+    lines += [f"poke {a:04X} {w:04X}" for a, w in case.pokes]
+    if case.trigger:
+        pokes = " ".join(f"{a:04X}={w:04X}" for a, w in case.trigger.pokes)
+        lines.append(f"trigger {case.trigger.pc:04X} {pokes}")
+    if seen.kind == "input-exhausted":
+        lines.append(f"input-exhausted {pc:04X}")
+    elif seen.kind == "illegal-instruction":
+        lines.append(f"illegal {seen.registers.pc:04X} {seen.registers.ir:04X}")
+    else:
+        lines += format_halted(seen, baseline)
+    return "\n".join(lines) + "\n"
+
+
+def format_halted(seen: Observation, baseline: list[int]) -> list[str]:
+    registers = " ".join(f"{value:04X}" for value in [*seen.registers.r, seen.registers.pc])
+    preview = json.dumps(seen.output.decode("latin-1"))[:160]
+    lines = [
+        "halted",
+        f"registers {registers}",
+        f"# output text: {preview}",
+        f"output {seen.output.hex().upper()}",
+    ]
+    changed = sorted(address for address, word in seen.memory.items() if word != baseline[address])
+    run: list[int] = []
+    for address in changed:
+        if run and (address != run[-1] + 1 or len(run) == MEMORY_LINE_WORDS):
+            lines.append(memory_line(run, seen.memory))
+            run = []
+        run.append(address)
+    if run:
+        lines.append(memory_line(run, seen.memory))
+    return lines
+
+
+def memory_line(addresses: list[int], memory: dict[int, int]) -> str:
+    words = " ".join(f"{memory[address]:04X}" for address in addresses)
+    return f"memory {addresses[0]:04X} {words}"
+
+
+def loaded_memory(objects: list[bytes]) -> list[int]:
+    """Memory after loading each .obj (big-endian origin word, then words) in order."""
+    memory = [0] * 0x10000
+    for data in objects:
+        words = [int.from_bytes(data[i : i + 2], "big") for i in range(0, len(data) - 1, 2)]
+        for offset, word in enumerate(words[1:]):
+            memory[(words[0] + offset) & 0xFFFF] = word
+    return memory
+
+
+def capture_case(case: Case, objects: dict[str, bytes], reference_os: bytes, tools: Tools) -> str:
+    files = {f"{Path(case.image).stem}.obj": objects[case.image]}
+    if case.os != "reference":
+        files[f"{Path(case.os).stem}.obj"] = objects[case.os]
+    final = b"" if case.expect == "input-exhausted" else state_dump()
+    status, transcript = run_sim(sim_script(case, None, final), files, tools)
+    seen = observe(case, status, transcript)
+    if seen.kind != case.expect:
+        raise CaptureError(f"{case.name}: expected {case.expect}, lc3sim gave {seen.kind}")
+    pc = exhaustion_pc(case, files, tools) if seen.kind == "input-exhausted" else None
+    os_object = reference_os if case.os == "reference" else objects[case.os]
+    baseline = loaded_memory([os_object, objects[case.image]])
+    names = (f"{Path(case.os).stem}.obj", f"{Path(case.image).stem}.obj")
+    return format_case(case, names, seen, pc, baseline)
+
+
+def capture_directory(directory: Path, reference_os: bytes, tools: Tools) -> int:
+    raw_cases = json.loads((directory / "cases.json").read_text())["cases"]
+    cases = [parse_case(raw) for raw in raw_cases]
+    if len({case.name for case in cases}) != len(cases):
+        raise CaptureError(f"{directory}: duplicate case names")
+    sources = sorted({name for case in cases for name in (case.image, case.os) if name != "reference"})
+    if len({Path(name).stem for name in sources}) != len(sources):
+        raise CaptureError(f"{directory}: two sources share a file stem")
+    objects = {name: build_object(directory / name, tools) for name in sources}
+    texts = {case.name: capture_case(case, objects, reference_os, tools) for case in cases}
+    for stale in [*directory.glob("*.case"), *directory.glob("*.obj")]:
+        stale.unlink()
+    for name, data in objects.items():
+        (directory / (Path(name).stem + ".obj")).write_bytes(data)
+    for name, text in texts.items():
+        (directory / f"{name}.case").write_text(text)
+    return len(texts)
+
+
+def main() -> int:
+    repo = Path(__file__).resolve().parent.parent
+    reference = main_checkout() / "reference"
+    tools = find_tools(reference)
+    reference_os = (reference / "lc3tools" / "lc3os.obj").read_bytes()
+    directories = [repo / "tests/fixtures/differential", reference / "fixtures"]
+    for directory in directories:
+        if not (directory / "cases.json").is_file():
+            print(f"skipping: manifest not found at {directory / 'cases.json'}", file=sys.stderr)
+            continue
+        print(f"{directory}: {capture_directory(directory, reference_os, tools)} cases captured")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except CaptureError as error:
+        print(f"capture failed: {error}", file=sys.stderr)
+        sys.exit(1)

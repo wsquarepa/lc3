@@ -1,0 +1,190 @@
+{
+  "cases": [
+    {
+      "name": "start-state-registers",
+      "os": "reference",
+      "image": "start-state-registers.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "halt-by-control-register-keeps-registers",
+      "os": "reference",
+      "image": "halt-by-control-register-keeps-registers.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "computation-memory-addressing",
+      "os": "reference",
+      "image": "computation-memory-addressing.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "computation-branches-and-subroutines",
+      "os": "reference",
+      "image": "computation-branches-and-subroutines.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "lea-sets-condition-codes-at-high-origin",
+      "os": "reference",
+      "image": "lea-sets-condition-codes-at-high-origin.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "binary-source-addition",
+      "os": "reference",
+      "image": "binary-source-addition.bin",
+      "expect": "halted"
+    },
+    {
+      "name": "console-getc-out-echo",
+      "os": "reference",
+      "image": "console-getc-out-echo.asm",
+      "expect": "halted",
+      "input": "Hello"
+    },
+    {
+      "name": "console-getc-high-bytes",
+      "os": "reference",
+      "image": "console-getc-high-bytes.asm",
+      "expect": "halted",
+      "input": "\u0000\u0080\u00ff\u007f"
+    },
+    {
+      "name": "console-out-low-byte-only",
+      "os": "reference",
+      "image": "console-out-low-byte-only.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "console-puts-escapes",
+      "os": "reference",
+      "image": "console-puts-escapes.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "console-in-prompt-and-echo",
+      "os": "reference",
+      "image": "console-in-prompt-and-echo.asm",
+      "expect": "halted",
+      "input": "xy"
+    },
+    {
+      "name": "console-putsp-packed",
+      "os": "reference",
+      "image": "console-putsp-packed.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "console-read-line-into-buffer",
+      "os": "reference",
+      "image": "console-read-line-into-buffer.asm",
+      "expect": "halted",
+      "input": "hello world\n"
+    },
+    {
+      "name": "console-undefined-trap-reaches-halt",
+      "os": "reference",
+      "image": "console-undefined-trap-reaches-halt.asm",
+      "expect": "halted"
+    },
+    {
+      "name": "input-exhausted-getc-first",
+      "os": "reference",
+      "image": "input-exhausted-getc-first.asm",
+      "expect": "input-exhausted"
+    },
+    {
+      "name": "input-exhausted-after-partial-input",
+      "os": "reference",
+      "image": "input-exhausted-after-partial-input.asm",
+      "expect": "input-exhausted",
+      "input": "ab"
+    },
+    {
+      "name": "input-exhausted-in-trap",
+      "os": "reference",
+      "image": "input-exhausted-in-trap.asm",
+      "expect": "input-exhausted"
+    },
+    {
+      "name": "input-exhausted-direct-keyboard-read",
+      "os": "reference",
+      "image": "input-exhausted-direct-keyboard-read.asm",
+      "expect": "input-exhausted",
+      "input": "z"
+    },
+    {
+      "name": "illegal-add-with-malformed-register-mode",
+      "os": "reference",
+      "image": "illegal-add-with-malformed-register-mode.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-and-with-malformed-register-mode",
+      "os": "reference",
+      "image": "illegal-and-with-malformed-register-mode.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-instruction-at-origin",
+      "os": "reference",
+      "image": "illegal-instruction-at-origin.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-instruction-reached-by-jump",
+      "os": "reference",
+      "image": "illegal-instruction-reached-by-jump.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-jump-subroutine-register-with-nonzero-reserved-bits",
+      "os": "reference",
+      "image": "illegal-jump-subroutine-register-with-nonzero-reserved-bits.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-jump-with-nonzero-reserved-bits",
+      "os": "reference",
+      "image": "illegal-jump-with-nonzero-reserved-bits.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-not-with-nonzero-reserved-bits",
+      "os": "reference",
+      "image": "illegal-not-with-nonzero-reserved-bits.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-reserved-opcode-with-operand-bits",
+      "os": "reference",
+      "image": "illegal-reserved-opcode-with-operand-bits.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-reserved-opcode",
+      "os": "reference",
+      "image": "illegal-reserved-opcode.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-return-from-interrupt-with-operand-bits",
+      "os": "reference",
+      "image": "illegal-return-from-interrupt-with-operand-bits.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-return-from-interrupt",
+      "os": "reference",
+      "image": "illegal-return-from-interrupt.asm",
+      "expect": "illegal-instruction"
+    },
+    {
+      "name": "illegal-trap-with-nonzero-upper-bits",
+      "os": "reference",
+      "image": "illegal-trap-with-nonzero-upper-bits.asm",
+      "expect": "illegal-instruction"
+    }
+  ]
+}
