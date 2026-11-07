@@ -191,59 +191,55 @@ impl State {
         self
     }
 
-    pub(crate) fn execute(
-        mut self,
-        mem_latency: NonZeroU32,
-        cycle_cap: u64,
-        input: &[u8],
-    ) -> Result<(Self, u64), Failure> {
-        if cycle_cap == 0 {
-            return Err(Failure::CycleCapReached);
-        }
-        let mut cycles = 0;
-        while !self.halted {
-            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input)?;
-            self = next;
-            cycles += cost;
-        }
-        Ok((self, cycles))
-    }
-
-    /// Runs with once-per-PC trigger batches before fetch and cycle-cap checks.
-    /// Returns halted state and cycles, or the same failures as plain execution.
-    /// A 64 KiB address table makes each instruction's trigger check constant-time;
-    /// the trigger list is scanned only when a pending address is reached.
-    pub(crate) fn execute_with_triggers(
+    /// Executes with fixed fetch-address owners and optional once-per-PC triggers.
+    /// Requires one owner per address, each below `owner_count`. Returns halted
+    /// state, total cycles and owner buckets, or a cap, decode or input failure.
+    /// Trigger checks compile out when `WITH_TRIGGERS` is false; otherwise a
+    /// 64 KiB pending table gives constant-time checks between trigger batches.
+    pub(crate) fn execute<const WITH_TRIGGERS: bool>(
         mut self,
         mem_latency: NonZeroU32,
         cycle_cap: u64,
         input: &[u8],
         triggers: &[Trigger],
-    ) -> Result<(Self, u64), Failure> {
-        let mut pending = vec![false; MEMORY_WORDS];
-        for trigger in triggers {
-            pending[usize::from(trigger.pc)] = true;
+        owners: &[u16],
+        owner_count: usize,
+    ) -> Result<(Self, u64, Vec<u64>), Failure> {
+        let mut pending = if WITH_TRIGGERS {
+            vec![false; MEMORY_WORDS]
+        } else {
+            Vec::new()
+        };
+        if WITH_TRIGGERS {
+            for trigger in triggers {
+                pending[usize::from(trigger.pc)] = true;
+            }
         }
+        let mut buckets = vec![0; owner_count];
         let mut cycles = 0;
         while !self.halted {
-            while pending[usize::from(self.registers.pc)] {
-                let pc = self.registers.pc;
-                pending[usize::from(pc)] = false;
-                for trigger in triggers.iter().filter(|trigger| trigger.pc == pc) {
-                    self = self.apply_pokes(&trigger.pokes);
+            if WITH_TRIGGERS {
+                while pending[usize::from(self.registers.pc)] {
+                    let pc = self.registers.pc;
+                    pending[usize::from(pc)] = false;
+                    for trigger in triggers.iter().filter(|trigger| trigger.pc == pc) {
+                        self = self.apply_pokes(&trigger.pokes);
+                    }
                 }
             }
             if cycle_cap == 0 {
                 return Err(Failure::CycleCapReached);
             }
+            let pc = self.registers.pc;
             let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input)?;
             self = next;
             cycles += cost;
+            buckets[usize::from(owners[usize::from(pc)])] += cost;
         }
-        Ok((self, cycles))
+        Ok((self, cycles, buckets))
     }
 
-    // Keep instruction dispatch inside each loop: outlining it adds per-instruction
+    // Keep instruction dispatch inside execution: outlining it adds per-instruction
     // state transfers across a call boundary, measurable even without triggers.
     #[inline(always)]
     fn step(

@@ -2,8 +2,8 @@ mod common;
 
 use common::{halted, image, os};
 use lc3::{
-    BootFailure, Case, Failure, Format, IllegalKind, MemoryPoke, Outcome, Pokes, PrepareError,
-    Register, Trigger, load, prepare, run,
+    Attribution, BootFailure, Case, Failure, Format, IllegalKind, MemoryPoke, Outcome, Pokes,
+    PrepareError, Register, Trigger, WordCounts, load, prepare, run,
 };
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -22,6 +22,27 @@ fn obj_runs_through_trap_halt_with_boot_cycles_excluded() {
     assert_eq!(halted.memory[0x1000], 0);
     assert_eq!(halted.cycles, (5 + 2 * 4) + (6 + 3 * 4));
     assert_eq!(halted.mem_latency, NonZeroU32::new(4).unwrap());
+    assert_eq!(
+        halted.attribution,
+        Attribution {
+            images: vec![13],
+            os: 18,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(
+        halted.word_counts,
+        WordCounts {
+            images: vec![1],
+            os: 493,
+        }
+    );
+    assert_eq!(
+        halted.attribution.images.iter().sum::<u64>()
+            + halted.attribution.os
+            + halted.attribution.unattributed,
+        halted.cycles
+    );
 }
 
 #[test]
@@ -150,6 +171,280 @@ fn images_overlay_the_boot_snapshot_in_order_and_use_the_first_origin() {
     assert_eq!(halted.registers.pc, 0x3201);
     assert_eq!(halted.registers.r[7], 0x3001);
     assert_eq!(halted.memory[0x3001], 0xbeef);
+    assert_eq!(
+        halted.attribution,
+        Attribution {
+            images: vec![0, 13, 0, 18, 0],
+            os: 0,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(
+        halted.word_counts,
+        WordCounts {
+            images: vec![2, 1, 1, 2, 1],
+            os: 493,
+        }
+    );
+    assert_eq!(halted.cycles, 31);
+}
+
+#[test]
+fn a_subroutine_in_the_second_image_receives_its_instruction_cycles() {
+    let prepared = prepare(
+        &os(),
+        &[
+            image(0x3000, &[0x48ff, 0xf025]),
+            image(0x3100, &[0x1021, 0xc1c0]),
+        ],
+        latency(),
+    )
+    .unwrap();
+    let Outcome::Halted(result) = run(&prepared, &Case::default()) else {
+        panic!("expected halted after returning from the second image");
+    };
+    assert_eq!(result.registers.r[0], 1);
+    assert_eq!(
+        result.attribution,
+        Attribution {
+            images: vec![22, 16],
+            os: 18,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(result.cycles, 56);
+}
+
+#[test]
+fn an_image_overriding_the_os_halt_routine_owns_its_fetch_addresses() {
+    let prepared = prepare(
+        &os(),
+        &[
+            image(0x3000, &[0xf025]),
+            image(0x0210, &[0x1261, 0xba00, 0xfffe]),
+        ],
+        latency(),
+    )
+    .unwrap();
+    let Outcome::Halted(result) = run(&prepared, &Case::default()) else {
+        panic!("expected halted in the replacement routine");
+    };
+    assert_eq!(result.registers.r[1], 1);
+    assert_eq!(
+        result.attribution,
+        Attribution {
+            images: vec![13, 26],
+            os: 0,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(result.cycles, 39);
+}
+
+#[test]
+fn self_modifying_code_keeps_its_loading_image_owner() {
+    let prepared = prepare(
+        &os(),
+        &[image(0x3000, &[0x2003, 0x3000, 0xd000, 0xf025, 0x1261])],
+        latency(),
+    )
+    .unwrap();
+    let Outcome::Halted(result) = run(&prepared, &Case::default()) else {
+        panic!("expected halted after executing the stored ADD");
+    };
+    assert_eq!(result.memory[0x3002], 0x1261);
+    assert_eq!(result.registers.r[1], 1);
+    assert_eq!(
+        result.attribution,
+        Attribution {
+            images: vec![47],
+            os: 18,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(result.cycles, 65);
+}
+
+#[test]
+fn jumping_to_poked_unloaded_memory_attributes_the_halting_instruction_to_no_image() {
+    let prepared = prepare(
+        &os(),
+        &[image(0x3000, &[0x2001, 0xc000, 0x4000])],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        pokes: Pokes {
+            memory: vec![MemoryPoke {
+                address: 0x4000,
+                words: vec![0x1261, 0xba00, 0xfffe],
+            }],
+            ..Pokes::default()
+        },
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted in poked memory");
+    };
+    assert_eq!(result.registers.r[1], 1);
+    assert_eq!(
+        result.attribution,
+        Attribution {
+            images: vec![21],
+            os: 0,
+            unattributed: 26,
+        }
+    );
+    assert_eq!(result.cycles, 47);
+    assert_eq!(result.word_counts.images, vec![3]);
+}
+
+#[test]
+fn word_counts_include_reserved_space_and_empty_images_despite_overlaps() {
+    let source = b".ORIG x3000\nHALT\n.BLKW #4\n.END\n";
+    let assembled = load(Format::Asm, source).unwrap().image;
+    let prepared = prepare(
+        &os(),
+        &[assembled, image(0x3001, &[0xbeef]), image(0x4000, &[])],
+        latency(),
+    )
+    .unwrap();
+    let Outcome::Halted(result) = run(&prepared, &Case::default()) else {
+        panic!("expected halted with reserved space");
+    };
+    assert_eq!(
+        result.word_counts,
+        WordCounts {
+            images: vec![5, 1, 0],
+            os: 493,
+        }
+    );
+    assert_eq!(
+        result.attribution,
+        Attribution {
+            images: vec![13, 0, 0],
+            os: 18,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(&result.memory[0x3001..0x3005], &[0xbeef, 0, 0, 0]);
+    assert_eq!(result.cycles, 31);
+}
+
+#[test]
+fn ownership_wraps_with_image_addresses_and_later_images_override_it() {
+    let prepared = prepare(
+        &os(),
+        &[image(0xfffd, &[0, 0, 0x1021, 0xd000]), image(0, &[0xf025])],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        pokes: Pokes {
+            registers: vec![(Register::Pc, 0xffff)],
+            ..Pokes::default()
+        },
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after wrapping the PC");
+    };
+    assert_eq!(result.memory[0xfffe], 0x8000);
+    assert_eq!(
+        result.attribution,
+        Attribution {
+            images: vec![8, 13],
+            os: 18,
+            unattributed: 0,
+        }
+    );
+    assert_eq!(result.word_counts.images, vec![4, 1]);
+    assert_eq!(result.cycles, 39);
+}
+
+#[test]
+fn owner_capacity_accepts_65534_images_and_rejects_more_before_boot() {
+    let mut images = vec![image(0x3000, &[]); 65_534];
+    images[65_533] = image(0x3000, &[0xf025]);
+    let prepared = prepare(&os(), &images, latency()).unwrap();
+    let Outcome::Halted(result) = run(&prepared, &Case::default()) else {
+        panic!("expected halted at the largest supported image index");
+    };
+    assert_eq!(result.attribution.images.len(), 65_534);
+    assert_eq!(result.attribution.images[65_533], 13);
+    assert_eq!(result.attribution.images.iter().sum::<u64>(), 13);
+    assert_eq!(result.attribution.os, 18);
+    assert_eq!(result.attribution.unattributed, 0);
+    assert_eq!(result.word_counts.images.len(), 65_534);
+    assert_eq!(result.word_counts.images[65_533], 1);
+    assert_eq!(result.word_counts.images.iter().sum::<usize>(), 1);
+    assert_eq!(result.cycles, 31);
+
+    for count in [65_535, 65_536] {
+        images.push(image(0x3000, &[]));
+        for os in [os(), image(0x0200, &[0xd000])] {
+            assert_eq!(
+                prepare(&os, &images, latency()),
+                Err(PrepareError::TooManyImages { count, max: 65_534 })
+            );
+        }
+    }
+}
+
+#[test]
+fn unreachable_triggers_preserve_illegal_input_output_and_halting_outcomes() {
+    let mut words = os().words().to_vec();
+    words.resize(0x0217 - 0x0025, 0);
+    words[0x0210 - 0x0025..]
+        .copy_from_slice(&[0x2003, 0xb003, 0xba03, 0xd000, 0x0148, 0xfe06, 0xfffe]);
+    let os = image(0x0025, &words);
+    for (origin, words, input, cycle_cap) in [
+        (0x3000, vec![0x1021, 0x8abc], vec![], 9),
+        (0x3000, vec![0x1021, 0xddef], vec![], 9),
+        (0x3000, vec![0x1021, 0x1018], vec![], 9),
+        (0x3000, vec![0x8000], vec![], 0),
+        (0x3000, vec![0xa001, 0xf025, 0xfe02], vec![], 1000),
+        (0x3000, vec![0xa001, 0xf025, 0xfe02], vec![0xff], 1000),
+        (0xfe02, vec![0xd000], vec![], 1000),
+        (0xfe02, vec![0xd000], vec![], 0),
+        (
+            0x3000,
+            vec![0x2003, 0xb003, 0xf025, 0xd000, 0x0141, 0xfe06],
+            vec![],
+            1000,
+        ),
+        (0x3000, vec![0xb000, 0xfffe], vec![], 1000),
+        (0x3000, vec![0xb000, 0xfffe], vec![], 18),
+        (0x3000, vec![0xb000, 0xfffe], vec![], 19),
+        (0x3000, vec![0xf025], vec![], 1000),
+    ] {
+        let prepared = prepare(&os, &[image(origin, &words)], latency()).unwrap();
+        let case = Case {
+            input,
+            cycle_cap,
+            ..Case::default()
+        };
+        let plain = run(&prepared, &case);
+        let with_trigger = run(
+            &prepared,
+            &Case {
+                triggers: vec![Trigger {
+                    pc: 0xdead,
+                    pokes: Pokes::default(),
+                }],
+                ..case
+            },
+        );
+        assert_eq!(with_trigger, plain, "origin={origin:#06x}, words={words:?}");
+        if let Outcome::Halted(result) = plain {
+            assert_eq!(
+                result.attribution.images.iter().sum::<u64>()
+                    + result.attribution.os
+                    + result.attribution.unattributed,
+                result.cycles
+            );
+        }
+    }
 }
 
 #[test]

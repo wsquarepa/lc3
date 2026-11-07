@@ -1,4 +1,4 @@
-use lc3::{Case, Format, Halted, Image, Outcome, load, prepare, run};
+use lc3::{Case, Format, Halted, Image, Outcome, Pokes, Trigger, load, prepare, run};
 use std::num::NonZeroU32;
 
 pub fn image(origin: u16, words: &[u16]) -> Image {
@@ -24,8 +24,30 @@ pub fn os() -> Image {
 
 pub fn halted(origin: u16, words: &[u16], n: u32) -> Halted {
     let prepared = prepare(&os(), &[image(origin, words)], NonZeroU32::new(n).unwrap()).unwrap();
-    match run(&prepared, &Case::default()) {
-        Outcome::Halted(halted) => halted,
+    let outcome = run(&prepared, &Case::default());
+    assert_eq!(
+        run(
+            &prepared,
+            &Case {
+                triggers: vec![Trigger {
+                    pc: 0xdead,
+                    pokes: Pokes::default(),
+                }],
+                ..Case::default()
+            }
+        ),
+        outcome
+    );
+    match outcome {
+        Outcome::Halted(halted) => {
+            assert_eq!(
+                halted.attribution.images.iter().sum::<u64>()
+                    + halted.attribution.os
+                    + halted.attribution.unattributed,
+                halted.cycles
+            );
+            halted
+        }
         outcome => panic!("expected halted, got {outcome:?}"),
     }
 }

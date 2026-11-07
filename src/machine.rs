@@ -3,12 +3,15 @@ use crate::core::State;
 use std::num::NonZeroU32;
 
 const BOOT_CYCLE_CAP: u64 = 10_000_000;
+const MAX_IMAGES: usize = u16::MAX as usize - 1;
 
 /// An immutable boot snapshot with images loaded, ready for independent runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     snapshot: State,
     mem_latency: NonZeroU32,
+    owners: Box<[u16]>,
+    word_counts: WordCounts,
 }
 
 /// A register accepted by a case or trigger poke; pokes do not update other registers.
@@ -102,6 +105,26 @@ pub enum Outcome {
     Failed(Failure),
 }
 
+/// Instruction cycles assigned by fetch address ownership as loaded at preparation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribution {
+    /// Cycles fetched from addresses owned by each image, in loading order.
+    pub images: Vec<u64>,
+    /// Cycles fetched from addresses owned by the OS after image overlays.
+    pub os: u64,
+    /// Cycles fetched from addresses loaded by neither the OS nor any image.
+    pub unattributed: u64,
+}
+
+/// Source word counts, including reserved space and independent of load overlap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WordCounts {
+    /// Each image's word count, in loading order and excluding its origin word.
+    pub images: Vec<usize>,
+    /// The OS word count, excluding its origin word.
+    pub os: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Halted {
     pub registers: Registers,
@@ -116,6 +139,10 @@ pub struct Halted {
     /// when the run writes the machine control register without executing xF025.
     pub halt_output: Vec<u8>,
     pub cycles: u64,
+    /// Full instruction costs by fetch address owner, summing to `cycles`.
+    pub attribution: Attribution,
+    /// Source word counts for all images and the OS, independent of overlap.
+    pub word_counts: WordCounts,
     pub mem_latency: NonZeroU32,
 }
 
@@ -163,24 +190,63 @@ pub enum PrepareError {
     Boot(BootFailure),
     /// No images were supplied to provide the run's origin; boot was not attempted.
     NoImages,
+    /// Image count exceeds the u16 owner table's capacity; boot was not attempted.
+    TooManyImages {
+        /// Number of supplied images.
+        count: usize,
+        /// Largest supported image count, reserving owners for OS and unattributed.
+        max: usize,
+    },
 }
 
 /// Boots `os` from x0200, then loads nonempty `images` in order and selects the
 /// first origin. Image addresses wrap modulo x10000. Returns a shareable prepared
 /// machine, `PrepareError::NoImages` before boot for empty `images`, or
 /// `PrepareError::Boot` for a boot cap, an illegal word, or a KBDR read during boot.
+/// More than 65,534 images returns `PrepareError::TooManyImages` before boot.
 /// Boot uses empty console input and a fixed 10,000,000-cycle cap, and contributes
 /// no run cycles. Console bytes written during boot are discarded.
+/// Ownership is fixed by load order, including MCR and wrapping addresses; later
+/// images override earlier images and the OS. Boot writes do not change ownership.
 pub fn prepare(
     os: &Image,
     images: &[Image],
     mem_latency: NonZeroU32,
 ) -> Result<Prepared, PrepareError> {
     let first = images.first().ok_or(PrepareError::NoImages)?;
-    let (boot_snapshot, _) = State::zeroed()
+    if images.len() > MAX_IMAGES {
+        return Err(PrepareError::TooManyImages {
+            count: images.len(),
+            max: MAX_IMAGES,
+        });
+    }
+    let os_owner = images.len() as u16;
+    let owners = load_ownership(
+        vec![os_owner + 1; usize::from(u16::MAX) + 1].into_boxed_slice(),
+        os,
+        os_owner,
+    );
+    let owners = images
+        .iter()
+        .zip(0u16..)
+        .fold(owners, |owners, (image, owner)| {
+            load_ownership(owners, image, owner)
+        });
+    let word_counts = WordCounts {
+        images: images.iter().map(Image::word_count).collect(),
+        os: os.word_count(),
+    };
+    let (boot_snapshot, _, _) = State::zeroed()
         .load_image(os)
         .start_at(0x0200)
-        .execute(mem_latency, BOOT_CYCLE_CAP, &[])
+        .execute::<false>(
+            mem_latency,
+            BOOT_CYCLE_CAP,
+            &[],
+            &[],
+            &owners,
+            images.len() + 2,
+        )
         .map_err(|reason| PrepareError::Boot(BootFailure { reason }))?;
     let snapshot = images
         .iter()
@@ -189,7 +255,19 @@ pub fn prepare(
     Ok(Prepared {
         snapshot,
         mem_latency,
+        owners,
+        word_counts,
     })
+}
+
+/// Assigns an image's wrapping load addresses to `owner`, returning the owner table.
+fn load_ownership(mut owners: Box<[u16]>, image: &Image, owner: u16) -> Box<[u16]> {
+    let mut address = image.origin();
+    for _ in image.words() {
+        owners[usize::from(address)] = owner;
+        address = address.wrapping_add(1);
+    }
+    owners
 }
 
 /// Runs `case` on a private copy of `prepared`, returning final state on halt or
@@ -205,28 +283,50 @@ pub fn prepare(
 /// cost; a zero cycle cap fails before fetching any word.
 /// Case pokes apply before triggers, after loading; neither applies during boot.
 /// Triggers fire once before fetch and cycle-cap checks, including at the origin.
-/// Runs without triggers use the plain execution loop.
+/// Ownership and source word counts remain fixed across pokes and program stores.
+/// Runs without triggers omit trigger checks from the shared execution loop.
 pub fn run(prepared: &Prepared, case: &Case) -> Outcome {
     let state = prepared.snapshot.clone().apply_pokes(&case.pokes);
+    let image_count = prepared.word_counts.images.len();
     let result = if case.triggers.is_empty() {
-        state.execute(prepared.mem_latency, case.cycle_cap, &case.input)
-    } else {
-        state.execute_with_triggers(
+        state.execute::<false>(
             prepared.mem_latency,
             case.cycle_cap,
             &case.input,
             &case.triggers,
+            &prepared.owners,
+            image_count + 2,
+        )
+    } else {
+        state.execute::<true>(
+            prepared.mem_latency,
+            case.cycle_cap,
+            &case.input,
+            &case.triggers,
+            &prepared.owners,
+            image_count + 2,
         )
     };
     match result {
-        Ok((state, cycles)) => Outcome::Halted(Halted {
-            registers: state.registers,
-            memory: state.memory,
-            program_output: state.program_output,
-            halt_output: state.halt_output,
-            cycles,
-            mem_latency: prepared.mem_latency,
-        }),
+        Ok((state, cycles, mut buckets)) => {
+            let os = buckets[image_count];
+            let unattributed = buckets[image_count + 1];
+            buckets.truncate(image_count);
+            Outcome::Halted(Halted {
+                registers: state.registers,
+                memory: state.memory,
+                program_output: state.program_output,
+                halt_output: state.halt_output,
+                cycles,
+                attribution: Attribution {
+                    images: buckets,
+                    os,
+                    unattributed,
+                },
+                word_counts: prepared.word_counts.clone(),
+                mem_latency: prepared.mem_latency,
+            })
+        }
         Err(reason) => Outcome::Failed(reason),
     }
 }
