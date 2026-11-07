@@ -30,9 +30,16 @@ pub struct LoadedSources {
     pub images: Vec<Image>,
 }
 
-/// Chooses the source format from the lowercase extension at the end of `path`.
-pub fn format_of(path: &Path) -> Option<Format> {
+/// Reports whether `path` ends in `suffix` (a dot plus the extension, in
+/// lowercase), ignoring ASCII case.
+pub fn has_suffix(path: &Path, suffix: &str) -> bool {
     let name = path.as_os_str().as_encoded_bytes();
+    name.len() >= suffix.len()
+        && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
+/// Chooses the source format from the extension at the end of `path`, ignoring ASCII case.
+pub fn format_of(path: &Path) -> Option<Format> {
     [
         (".asm", Format::Asm),
         (".bin", Format::Bin),
@@ -40,7 +47,7 @@ pub fn format_of(path: &Path) -> Option<Format> {
         (".obj", Format::Obj),
     ]
     .into_iter()
-    .find(|(suffix, _)| name.ends_with(suffix.as_bytes()))
+    .find(|(suffix, _)| has_suffix(path, suffix))
     .map(|(_, format)| format)
 }
 
@@ -140,13 +147,14 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn format_follows_the_lowercase_suffix_only() {
+    fn format_follows_the_suffix_ignoring_case() {
         assert_eq!(format_of(Path::new("a.asm")), Some(Format::Asm));
         assert_eq!(format_of(Path::new("d/a.bin")), Some(Format::Bin));
         assert_eq!(format_of(Path::new("a.hex")), Some(Format::Hex));
         assert_eq!(format_of(Path::new("a.obj")), Some(Format::Obj));
         assert_eq!(format_of(Path::new(".asm")), Some(Format::Asm));
-        assert_eq!(format_of(Path::new("a.ASM")), None);
+        assert_eq!(format_of(Path::new("a.ASM")), Some(Format::Asm));
+        assert_eq!(format_of(Path::new("a.ObJ")), Some(Format::Obj));
         assert_eq!(format_of(Path::new("a.asm.bak")), None);
         assert_eq!(format_of(Path::new("a")), None);
     }

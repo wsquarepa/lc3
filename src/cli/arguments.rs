@@ -2,11 +2,11 @@
 
 use super::exit::UsageError;
 use super::help::HINT;
-use super::sources::{SOURCE_EXTENSIONS, format_of};
+use super::sources::{SOURCE_EXTENSIONS, format_of, has_suffix};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const RUN_FILE_SUFFIX: &[u8] = b".toml";
+const RUN_FILE_SUFFIX: &str = ".toml";
 const STDIN_PATH: &str = "-";
 const HELP_FLAG: &str = "--help";
 const JSON_FLAG: &str = "--json";
@@ -66,11 +66,7 @@ pub fn parse(arguments: &[OsString]) -> Result<Invocation, UsageError> {
 fn classify(path: PathBuf) -> Result<Entry, UsageError> {
     if path.as_os_str() == STDIN_PATH {
         Ok(Entry::RunFileOnStdin)
-    } else if path
-        .as_os_str()
-        .as_encoded_bytes()
-        .ends_with(RUN_FILE_SUFFIX)
-    {
+    } else if has_suffix(&path, RUN_FILE_SUFFIX) {
         Ok(Entry::RunFile(path))
     } else if format_of(&path).is_some() {
         Ok(Entry::BareSource(path))
@@ -111,16 +107,18 @@ mod tests {
 
     #[test]
     fn paths_are_classified_by_extension() {
-        assert_eq!(
-            parse(&args(&["r.toml"])),
-            run(Entry::RunFile("r.toml".into()), false)
-        );
+        for name in ["r.toml", "r.TOML"] {
+            assert_eq!(
+                parse(&args(&[name])),
+                run(Entry::RunFile(name.into()), false)
+            );
+        }
         assert_eq!(parse(&args(&["-"])), run(Entry::RunFileOnStdin, false));
         assert_eq!(
             parse(&args(&["--json", "-"])),
             run(Entry::RunFileOnStdin, true)
         );
-        for name in ["a.bin", "a.hex", "a.obj"] {
+        for name in ["a.bin", "a.hex", "a.obj", "a.ASM", "a.Hex"] {
             assert_eq!(
                 parse(&args(&[name])),
                 run(Entry::BareSource(name.into()), false)
@@ -142,7 +140,6 @@ mod tests {
             vec!["a.asm", "b.asm"],
             vec!["--wat"],
             vec!["--json", "--json", "a.asm"],
-            vec!["a.ASM"],
             vec!["a.txt"],
         ] {
             let error = parse(&args(&bad)).unwrap_err();

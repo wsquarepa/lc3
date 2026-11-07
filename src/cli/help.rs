@@ -7,7 +7,7 @@ pub const HELP: &str = r##"usage: lc3 <path> [--json]
        lc3 --help
 
   <path>   a run file ending in .toml, or a bare source ending in .asm, .bin,
-           .hex or .obj (extensions are lowercase and choose the format)
+           .hex or .obj (extensions choose the format and ignore case)
   -        read a run file from stdin
   --json   write one compact JSON object plus a newline to stdout instead of
            the console bytes and a stderr summary; may precede or follow <path>

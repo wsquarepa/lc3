@@ -227,9 +227,22 @@ fn every_source_extension_runs_with_json_before_or_after_the_path() {
 }
 
 #[test]
+fn source_and_run_file_extensions_match_case_insensitively() {
+    let sandbox = Sandbox::new();
+    sandbox.write("HALT.ASM", HALT_ASM);
+    sandbox.write("Halt.Hex", "3000\nB000\nFFFE\n");
+    sandbox.write("run.TOML", "images = [\"HALT.ASM\"]\n");
+    for path in ["HALT.ASM", "Halt.Hex", "run.TOML"] {
+        let (output, value) = sandbox.json(&[path, "--json"], b"");
+        assert_eq!(code(&output), 0, "{path}: {}", stderr(&output));
+        assert_eq!(value["outcome"], "halted", "{path}");
+    }
+}
+
+#[test]
 fn rejected_extensions_name_the_accepted_ones() {
     let sandbox = Sandbox::new();
-    for path in ["prog.txt", "prog.ASM", "prog", "prog.asm.bak"] {
+    for path in ["prog.txt", "prog.AS", "prog", "prog.asm.bak"] {
         sandbox.write(path, HALT_ASM);
         let output = sandbox.lc3(&[path], b"");
         assert_usage_error(&output, &[path, ".asm", ".bin", ".hex", ".obj", ".toml"]);
