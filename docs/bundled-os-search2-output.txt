@@ -1,0 +1,258 @@
+# Output of tools/bundled_os_search2.py. Each block is one invocation. The minima
+# equal the tested costs of the bundled routines; vector mode shows the 6M + I IN
+# that the vector-table rule excludes. HALT with three registers is argued in
+# docs/bundled-os-proof.md, not searched. Minima are deterministic; the path
+# printed for a minimum is one of possibly several of equal cost and may differ
+# between runs.
+
+$ python3 tools/bundled_os_search2.py --regs 2
+N=1 GETC: minimum 21 (regs=2, vector=False, states=486)
+    TRAP
+    R0 <- KBDR
+    RET
+N=1 OUT: minimum 21 (regs=2, vector=False, states=506)
+    TRAP
+    DDR <- R0
+    RET
+N=1 IN: minimum 54 (regs=2, vector=False, states=10807)
+    TRAP
+    spill R7 (T:RET)
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    R7 <- reload T:RET
+    RET
+N=1 HALT: minimum 188 (regs=2, vector=False, states=116548)
+    TRAP
+    R0 <- LEA ('PRE:DK:-', 10)
+    R7 <- LD ('WIN:DK', 32)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- LEA ('LO', 104)
+    DDR <- R7
+    DDR <- R0
+    R0 <- LEA ('LO', 97)
+    DDR <- R0
+    R0 <- LEA ('LO', 108)
+    DDR <- R0
+    R0 <- LEA ('LO', 116)
+    DDR <- R0
+    R0 <- LEA ('LO', 101)
+    DDR <- R0
+    R0 <- LEA ('LO', 100)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:DK', 10)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- ALU R0 ('Z', 0)
+    DDR <- R7
+    HALT
+N=4 GETC: minimum 39 (regs=2, vector=False, states=536)
+    TRAP
+    R0 <- KBDR
+    RET
+N=4 OUT: minimum 39 (regs=2, vector=False, states=580)
+    TRAP
+    DDR <- R0
+    RET
+N=4 IN: minimum 99 (regs=2, vector=False, states=10807)
+    TRAP
+    spill R7 (T:RET)
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    R7 <- reload T:RET
+    RET
+N=4 HALT: minimum 335 (regs=2, vector=False, states=116548)
+    TRAP
+    R0 <- LEA ('PRE:DK:-', 10)
+    R7 <- LD ('WIN:DK', 32)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- LEA ('LO', 104)
+    DDR <- R7
+    DDR <- R0
+    R0 <- LEA ('LO', 97)
+    DDR <- R0
+    R0 <- LEA ('LO', 108)
+    DDR <- R0
+    R0 <- LEA ('LO', 116)
+    DDR <- R0
+    R0 <- LEA ('LO', 101)
+    DDR <- R0
+    R0 <- LEA ('LO', 100)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:DK', 10)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- ALU R0 ('Z', 0)
+    DDR <- R7
+    HALT
+
+$ python3 tools/bundled_os_search2.py --regs 2 --vector
+N=1 GETC: minimum 21 (regs=2, vector=True, states=528)
+    TRAP
+    R0 <- KBDR
+    RET
+N=1 OUT: minimum 21 (regs=2, vector=True, states=548)
+    TRAP
+    DDR <- R0
+    RET
+N=1 IN: minimum 51 (regs=2, vector=True, states=16205)
+    TRAP
+    STI R7 -> vector table
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    RET
+N=1 HALT: minimum 188 (regs=2, vector=True, states=116477)
+    TRAP
+    R0 <- LEA ('PRE:D:-', 10)
+    R7 <- LD ('WIN:DK', 104)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- LEA ('LO', 32)
+    DDR <- R0
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 97)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:DK', 108)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 116)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 101)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 100)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 10)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- ALU R0 ('Z', 0)
+    DDR <- R7
+    HALT
+N=4 GETC: minimum 39 (regs=2, vector=True, states=591)
+    TRAP
+    R0 <- KBDR
+    RET
+N=4 OUT: minimum 39 (regs=2, vector=True, states=635)
+    TRAP
+    DDR <- R0
+    RET
+N=4 IN: minimum 96 (regs=2, vector=True, states=16245)
+    TRAP
+    STI R7 -> vector table
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    RET
+N=4 HALT: minimum 335 (regs=2, vector=True, states=116477)
+    TRAP
+    R0 <- LEA ('PRE:D:-', 10)
+    R7 <- LD ('WIN:DK', 104)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- LEA ('LO', 32)
+    DDR <- R0
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 97)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:DK', 108)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 116)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 101)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 100)
+    DDR <- R7
+    R7 <- ALU R7 ('WIN:D', 10)
+    DDR <- R0
+    R0 <- LEA ('LO', 45)
+    DDR <- R0
+    DDR <- R0
+    DDR <- R0
+    R0 <- ALU R0 ('Z', 0)
+    DDR <- R7
+    HALT
+
+$ python3 tools/bundled_os_search2.py --regs 3 --only GETC
+N=1 GETC: minimum 21 (regs=3, vector=False, states=1525)
+    TRAP
+    R0 <- KBDR
+    RET
+N=4 GETC: minimum 39 (regs=3, vector=False, states=9530)
+    TRAP
+    R0 <- KBDR
+    RET
+
+$ python3 tools/bundled_os_search2.py --regs 3 --only OUT
+N=1 OUT: minimum 21 (regs=3, vector=False, states=1503)
+    TRAP
+    DDR <- R0
+    RET
+N=4 OUT: minimum 39 (regs=3, vector=False, states=9341)
+    TRAP
+    DDR <- R0
+    RET
+
+$ python3 tools/bundled_os_search2.py --regs 3 --only IN
+N=1 IN: minimum 54 (regs=3, vector=False, states=577289)
+    TRAP
+    spill R7 (T:RET)
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    R7 <- reload T:RET
+    RET
+N=4 IN: minimum 99 (regs=3, vector=False, states=587869)
+    TRAP
+    spill R7 (T:RET)
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    R7 <- reload T:RET
+    RET
+
+$ python3 tools/bundled_os_search2.py --regs 3 --only IN --vector
+N=1 IN: minimum 51 (regs=3, vector=True, states=679238)
+    TRAP
+    STI R7 -> vector table
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    RET
+N=4 IN: minimum 96 (regs=3, vector=True, states=723954)
+    TRAP
+    STI R7 -> vector table
+    R7 <- LD ('WIN:DK', 10)
+    R0 <- KBDR
+    DDR <- R0
+    DDR <- R7
+    RET
