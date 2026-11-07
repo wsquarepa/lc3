@@ -17,10 +17,21 @@ blocks (47 words) must lie within 256 words of the copy's chain sites and of
 the next copy's entry, and the exit stubs read the spill slots off R3 = x1F00
 (offset6 reaches x1EE0-x1F1F), so the slots are pinned at x1EE0.
 
-Raises AssertionError when a gap overflows or a block is out of reach.
+Raises LayoutError when a gap overflows, a pinned block cannot start at its
+address or a side block is out of branch reach, and MarkerError when the
+source lacks one of the markers that delimit its verbatim pieces. The file is
+written only after generation succeeds, so a failure leaves it unchanged.
 """
 
 import sys
+
+
+class LayoutError(Exception):
+    """The generated PUTSP does not fit the gap layout."""
+
+
+class MarkerError(Exception):
+    """A marker that delimits a verbatim piece of the source is missing."""
 
 UNROLL = 8
 GAP_WORDS = 0xF8
@@ -253,26 +264,38 @@ def emit_gap(n, blocks, pre_pad=0, pinned=None):
     for block in blocks:
         if pinned and block in pinned:
             target = pinned[block]
-            assert target >= addr, f"gap {n}: block cannot start at x{target:04X} (cursor x{addr:04X})"
+            if target < addr:
+                raise LayoutError(f"gap {n}: block cannot start at x{target:04X} (cursor x{addr:04X})")
             if target > addr:
                 out.append(f"\t.BLKW #{target - addr}")
                 addr = target
         out.append(block)
         addr += words(block)
     end = gap_start(n) + GAP_WORDS
-    assert addr <= end, f"gap {n} overflows by {addr - end}"
+    if addr > end:
+        raise LayoutError(f"gap {n} overflows by {addr - end} words")
     if addr < end:
         out.append(f"\t.BLKW #{end - addr}")
     out.append(row(n + 1))
     return "\n".join(out)
 
 
+def marker_line(lines, description, matches, start=0):
+    """Index of the first line at or after `start` satisfying `matches`; MarkerError when none does."""
+    for i in range(start, len(lines)):
+        if matches(lines[i]):
+            return i
+    raise MarkerError(f"source has no {description} after line {start + 1}")
+
+
 def verbatim_pieces(lines):
     """Header (before .ORIG), HALT block and PUTS block of the current source."""
-    i_orig = next(i for i, l in enumerate(lines) if l.strip().startswith(".ORIG"))
-    i_halt = next(i for i, l in enumerate(lines) if l.startswith("; Address constants for HALT"))
-    i_halt_end = next(i for i, l in enumerate(lines) if "MCR <- 0 halts" in l and i > i_halt)
-    i_puts = next(i for i, l in enumerate(lines) if l.startswith("; PUTS: print the low byte"))
+    i_orig = marker_line(lines, ".ORIG directive", lambda l: l.strip().startswith(".ORIG"))
+    i_halt = marker_line(
+        lines, "'; Address constants for HALT' comment", lambda l: l.startswith("; Address constants for HALT")
+    )
+    i_halt_end = marker_line(lines, "'MCR <- 0 halts' comment of HALT", lambda l: "MCR <- 0 halts" in l, i_halt + 1)
+    i_puts = marker_line(lines, "'; PUTS: print the low byte' comment", lambda l: l.startswith("; PUTS: print the low byte"))
     return (
         "\n".join(lines[:i_orig]).rstrip("\n"),
         "\n".join(lines[i_halt:i_halt_end + 1]),
@@ -294,7 +317,8 @@ def putsp_gaps():
     word1 = word0 + words(chain_copy(0, sides[28]))
     g27_pre = GAP_WORDS - sum(words(b) for b in g27_blocks)
     copy0 = gap_start(27) + g27_pre
-    assert copy0 >= word1 - 256, f"copy 0 back edge out of reach: x{copy0:04X} vs WORD_1 x{word1:04X}"
+    if copy0 < word1 - 256:
+        raise LayoutError(f"copy 0 side block out of branch reach: x{copy0:04X} against WORD_1 x{word1:04X}")
     return (
         emit_gap(27, g27_blocks, pre_pad=g27_pre),
         emit_gap(28, g28_blocks, pinned={PUTSP_SLOTS: SLOTS}),
@@ -341,8 +365,9 @@ def main(argv):
     path = argv[1]
     with open(path, encoding="utf-8") as f:
         source = f.read()
+    generated = generate(source)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(generate(source))
+        f.write(generated)
 
 
 if __name__ == "__main__":
