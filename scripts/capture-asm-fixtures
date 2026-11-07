@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Usage: scripts/capture-asm-fixtures [path/to/lc3as]
+# Inputs: tests/fixtures/asm/*.asm and the native reference lc3as executable.
+# Outputs: matching .obj fixtures; all assembler work happens in a temporary directory.
+# Requires the local git-excluded reference/ folder unless an executable is supplied.
+set -euo pipefail
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+reference_root=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
+reference_root=$(dirname -- "$reference_root")
+assembler=${1:-"$reference_root/reference/lc3tools/lc3as"}
+if [[ ! -x "$assembler" ]]; then
+    echo "reference assembler is not executable: $assembler" >&2
+    exit 1
+fi
+assembler=$(realpath -- "$assembler")
+scratch=$(mktemp -d)
+trap 'rm -rf -- "$scratch"' EXIT
+for source in "$repo_root"/tests/fixtures/asm/*.asm; do
+    name=$(basename -- "$source" .asm)
+    cp -- "$source" "$scratch/$name.asm"
+    "$assembler" "$scratch/$name.asm"
+    cp -- "$scratch/$name.obj" "$repo_root/tests/fixtures/asm/$name.obj"
+done

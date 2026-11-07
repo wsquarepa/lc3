@@ -1,3 +1,4 @@
+mod assembler;
 mod convert;
 mod core;
 mod machine;
