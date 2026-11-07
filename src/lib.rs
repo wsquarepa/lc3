@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 mod assembler;
 mod convert;
 mod core;
+mod literal_text;
 mod machine;
 mod source;
 

@@ -37,7 +37,8 @@ Run file (TOML; unknown keys are errors):
   x4010 = 9
 
   Words and addresses are TOML integers or literal strings: x/X hex, # decimal
-  or bare decimal, each with an optional minus. Words take -32768..65535
+  or bare decimal, each with an optional minus directly before the digits (x-10,
+  #-12, -12; not -x10). Words take -32768..65535
   (negative is two's complement); addresses and pc take 0..65535.
   All relative paths resolve against the current working directory.
 

@@ -5,6 +5,8 @@ mod arguments;
 mod exit;
 mod help;
 mod literal;
+#[path = "../literal_text.rs"]
+mod literal_text;
 mod render;
 mod run_file;
 mod sha256;

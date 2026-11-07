@@ -684,7 +684,7 @@ fn memory_and_register_literal_forms_all_parse() {
         "run.toml",
         r##"
 images = ["halt.asm"]
-dump = ["x5000..x5007"]
+dump = ["x5000..x5006"]
 
 [memory]
 x5000 = "XFF"
@@ -692,17 +692,26 @@ x5001 = "#-1"
 x5002 = "-1"
 x5003 = "12"
 x5004 = "x-1"
-x5005 = "-x1"
-x5006 = -32768
-x5007 = 65535
+x5005 = -32768
+x5006 = 65535
 "##,
     );
     let (output, value) = sandbox.json(&["run.toml", "--json"], b"");
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         value["dumps"][0]["words"],
-        json!([0xFF, 0xFFFF, 0xFFFF, 12, 0xFFFF, 0xFFFF, 0x8000, 0xFFFF])
+        json!([0xFF, 0xFFFF, 0xFFFF, 12, 0xFFFF, 0x8000, 0xFFFF])
     );
+}
+
+#[test]
+fn a_minus_before_a_literal_prefix_is_rejected_like_the_assembler_does() {
+    for literal in ["-x1", "-#1"] {
+        assert_run_file_error(
+            &format!("images = [\"halt.asm\"]\n[memory]\nx5000 = \"{literal}\"\n"),
+            &["run.toml", literal],
+        );
+    }
 }
 
 fn assert_memory_overlap_rejected(memory: &str, expected: &[&str]) {

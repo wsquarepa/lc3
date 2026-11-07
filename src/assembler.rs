@@ -1,5 +1,6 @@
 use std::collections::{HashMap, hash_map::Entry};
 
+use crate::literal_text::{LiteralError, parse as parse_literal};
 use crate::{Diagnostic, Image, Loaded, Severity};
 
 struct ParsedLine<'a> {
@@ -300,17 +301,12 @@ fn is_stray_operand_format(text: &str) -> bool {
         .map(|operand| operand.trim_matches([' ', '\t']))
         .collect();
     match operands.as_slice() {
-        [operand] => {
-            is_register(operand) || literal_parts(operand).is_some() || operand.starts_with('"')
-        }
+        [operand] => is_register(operand) || is_literal(operand) || operand.starts_with('"'),
         [first, second] => {
-            is_register(first)
-                && (is_register(second) || literal_parts(second).is_some() || is_label(second))
+            is_register(first) && (is_register(second) || is_literal(second) || is_label(second))
         }
         [first, second, third] => {
-            is_register(first)
-                && is_register(second)
-                && (is_register(third) || literal_parts(third).is_some())
+            is_register(first) && is_register(second) && (is_register(third) || is_literal(third))
         }
         _ => false,
     }
@@ -463,7 +459,7 @@ fn relative_field(
     labels: &HashMap<String, u16>,
     address: u16,
 ) -> Result<u16, String> {
-    if literal_parts(text).is_some() {
+    if is_literal(text) {
         return signed_field(text, bits);
     }
     let offset = i64::from(label_address(text, labels)?) - i64::from(address) - 1;
@@ -537,7 +533,7 @@ fn encode_instruction(
                 | signed_field(offset, 6)?)
         }
         (".FILL", [value]) => {
-            if literal_parts(value).is_some() {
+            if is_literal(value) {
                 literal(value, -32768, 65535)
             } else {
                 label_address(value, labels)
@@ -587,31 +583,12 @@ fn signed_field(text: &str, bits: u32) -> Result<u16, String> {
     Ok(literal(text, -limit, limit - 1)? & ((1_u16 << bits) - 1))
 }
 
-fn literal_parts(text: &str) -> Option<(&str, u32)> {
-    let (digits, radix) = if let Some(digits) = text.strip_prefix(['x', 'X']) {
-        (digits, 16)
-    } else {
-        (text.strip_prefix('#').unwrap_or(text), 10)
-    };
-    let magnitude = digits.strip_prefix('-').unwrap_or(digits);
-    if magnitude.is_empty()
-        || !magnitude.bytes().all(|byte| {
-            if radix == 16 {
-                byte.is_ascii_hexdigit()
-            } else {
-                byte.is_ascii_digit()
-            }
-        })
-    {
-        return None;
-    }
-    Some((digits, radix))
+fn is_literal(text: &str) -> bool {
+    parse_literal(text) != Err(LiteralError::Malformed)
 }
 
 fn literal(text: &str, minimum: i64, maximum: i64) -> Result<u16, String> {
-    let (digits, radix) = literal_parts(text).ok_or_else(|| format!("invalid literal {text:?}"))?;
-    let value =
-        i64::from_str_radix(digits, radix).map_err(|_| format!("invalid literal {text:?}"))?;
+    let value = parse_literal(text).map_err(|_| format!("invalid literal {text:?}"))?;
     if !(minimum..=maximum).contains(&value) {
         return Err(format!("literal {text:?} outside {minimum}..={maximum}"));
     }

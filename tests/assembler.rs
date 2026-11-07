@@ -366,6 +366,20 @@ fn asm_accepts_exact_field_boundaries_without_reinterpreting_literals() {
 }
 
 #[test]
+fn asm_takes_the_minus_after_a_literal_prefix_and_rejects_it_before() {
+    let loaded = load(
+        Format::Asm,
+        b".ORIG x3000\n.FILL x-10\n.FILL #-12\n.FILL -12\n.END\n",
+    )
+    .unwrap();
+    assert_eq!(loaded.image.words(), &[0xfff0, 0xfff4, 0xfff4]);
+    for literal in ["-x10", "-#12"] {
+        let source = format!(".ORIG x3000\n.FILL {literal}\n.END\n");
+        assert!(load(Format::Asm, source.as_bytes()).is_err(), "{literal}");
+    }
+}
+
+#[test]
 fn asm_rejects_negative_and_oversized_origins() {
     for literal in ["#-1", "x-1", "#65536", "x10000"] {
         let source = format!(".ORIG {literal}\nHALT\n.END\n");
