@@ -12,8 +12,9 @@
 ; table (x0100-x01FF) or the device page (xFE00-xFFFF).
 ;
 ; Layout: PUTSP's table occupies eight words at the start of each of 32
-; consecutive 256-word rows (x0201-x2108). The routines live in the first
-; three gaps between rows; the rest of the gaps are unused.
+; consecutive 256-word rows (x0201-x2108). GETC, OUT, IN, PUTSP and HALT live
+; in the first two gaps between rows; PUTS, too long for a gap, sits just
+; above the table.
 ;
 ; Device registers are out of PC-relative reach, so a routine reaches them
 ; either through a pointer (LDI/STI) or through a base register holding
@@ -289,231 +290,7 @@ TRAP_HALT
 	.FILL xC2
 	.FILL xE2
 
-PUTS_R0		.BLKW 1
-PUTS_R1		.BLKW 1
-PUTS_R2		.BLKW 1
-PUTS_R7		.BLKW 1
-PUTS_BASE	.FILL xFE0A
-PUTS_STRIDE	.FILL #64
-; PUTS: print the low byte of each word from M[R0] up to the first x0000
-; word; R0 restored. The loop body handles 64 words with one pointer ADD of
-; the stride R2 = 64, using LDR offsets -32..31 around R0; 64 words is the
-; most one direct back edge can span (193 words <= 256). Loop invariants:
-; R7 = the word just loaded (already known non-zero), R1 = xFE0A, and the
-; next word is at R0 + its offset in the body. An empty string exits on the
-; taken BRz so that every non-empty string gets the cheaper not-taken branch.
-; PUTS sits alone in the third table gap, with its own constants and slots.
-TRAP_PUTS
-	ST R7,PUTS_R7
-	LDR R7,R0,#0
-	BRz PUTS_EMPTY
-	ST R0,PUTS_R0
-	ST R1,PUTS_R1
-	ST R2,PUTS_R2
-	LD R1,PUTS_BASE
-	LD R2,PUTS_STRIDE
-PUTS_LOOP
-	STR R7,R1,#-4		; word at offset 0
-	LDR R7,R0,#1
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#2
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#3
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#4
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#5
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#6
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#7
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#8
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#9
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#10
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#11
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#12
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#13
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#14
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#15
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#16
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#17
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#18
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#19
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#20
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#21
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#22
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#23
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#24
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#25
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#26
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#27
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#28
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#29
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#30
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#31
-	BRz PUTS_END
-	STR R7,R1,#-4
-	ADD R0,R0,R2		; next 64-word window: offsets -32..31
-	LDR R7,R0,#-32
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-31
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-30
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-29
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-28
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-27
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-26
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-25
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-24
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-23
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-22
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-21
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-20
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-19
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-18
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-17
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-16
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-15
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-14
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-13
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-12
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-11
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-10
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-9
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-8
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-7
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-6
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-5
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-4
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-3
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-2
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#-1
-	BRz PUTS_END
-	STR R7,R1,#-4
-	LDR R7,R0,#0
-	BRnp PUTS_LOOP		; the next iteration's first check is the back edge
-PUTS_END
-	LD R2,PUTS_R2
-	LD R1,PUTS_R1
-	LD R0,PUTS_R0
-PUTS_EMPTY
-	LD R7,PUTS_R7
-	RET
-	.BLKW x24
+	.BLKW xF8
 	.FILL x03
 	.FILL x23
 	.FILL x43
@@ -774,5 +551,332 @@ PUTS_EMPTY
 	.FILL xBF
 	.FILL xDF
 	.FILL xFF
+
+
+; PUTS: print the low byte of each word from M[R0] up to the first x0000
+; word; R0 restored. Two phases (docs/bundled-os-proof.md, "PUTS"):
+; - Words 0-31 are read at offsets 0-31 from the unmoved R0, with only R7 and
+;   R1 (the DDR base xFE0A) spilled, which meets the per-length lower bound
+;   for 8 <= L <= 31 up to the taken exit.
+; - Once word 31 is non-zero, R0 and R2 are saved, R2 = 64, and a 64-word
+;   stride loop (offsets -32..31, one ADD per window, the next iteration's
+;   first check as the back edge) prints the rest.
+; The prefix checks word 31 with a taken BRnp so that the exits, slots and
+; constants can sit between the phases, within reach of both ends.
+; An empty string pays the taken entry branch. PUTS sits above the table.
+TRAP_PUTS
+	ST R7,PUTS_R7
+	LDR R7,R0,#0
+	BRz PUTS_EMPTY		; an empty string pays the taken branch
+	ST R1,PUTS_R1
+	LD R1,PUTS_BASE
+	STR R7,R1,#-4		; word 0
+	LDR R7,R0,#1
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#2
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#3
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#4
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#5
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#6
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#7
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#8
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#9
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#10
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#11
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#12
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#13
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#14
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#15
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#16
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#17
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#18
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#19
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#20
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#21
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#22
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#23
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#24
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#25
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#26
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#27
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#28
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#29
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#30
+	BRz PUTS_SHORT
+	STR R7,R1,#-4
+	LDR R7,R0,#31
+	BRnp PUTS_PREFIX_REST	; continuing pays this taken branch so the data below is skipped
+PUTS_SHORT
+	LD R1,PUTS_R1
+PUTS_EMPTY
+	LD R7,PUTS_R7
+	RET
+PUTS_R0		.BLKW 1
+PUTS_R1		.BLKW 1
+PUTS_R2		.BLKW 1
+PUTS_R7		.BLKW 1
+PUTS_BASE	.FILL xFE0A
+PUTS_STRIDE	.FILL #64
+PUTS_PREFIX_REST
+	ST R0,PUTS_R0		; word 31 is non-zero: switch to the stride loop
+	ST R2,PUTS_R2
+	LD R2,PUTS_STRIDE
+PUTS_LOOP
+	STR R7,R1,#-4		; word 31 + 64m, at offset 31
+	ADD R0,R0,R2		; next 64-word window
+	LDR R7,R0,#-32
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-31
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-30
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-29
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-28
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-27
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-26
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-25
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-24
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-23
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-22
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-21
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-20
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-19
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-18
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-17
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-16
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-15
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-14
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-13
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-12
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-11
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-10
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-9
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-8
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-7
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-6
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-5
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-4
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-3
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-2
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#-1
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#0
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#1
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#2
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#3
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#4
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#5
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#6
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#7
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#8
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#9
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#10
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#11
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#12
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#13
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#14
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#15
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#16
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#17
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#18
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#19
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#20
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#21
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#22
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#23
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#24
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#25
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#26
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#27
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#28
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#29
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#30
+	BRz PUTS_END
+	STR R7,R1,#-4
+	LDR R7,R0,#31
+	BRnp PUTS_LOOP		; the next iteration's first check is the back edge
+PUTS_END
+	LD R2,PUTS_R2
+	LD R0,PUTS_R0
+	LD R1,PUTS_R1
+	LD R7,PUTS_R7
+	RET
 
 	.END

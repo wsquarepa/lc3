@@ -226,22 +226,32 @@ fn in_echoes_the_byte_and_a_linefeed_without_the_prompt_in_99_cycles() {
     assert_eq!(7 * Costs::at(1).m + Costs::at(1).a, 54);
 }
 
-/// PUTS cost for a string of `len` non-zero words: a 64-word loop body with
-/// one stride ADD, entered at offset 0, so the ADDs fall before words 32, 96,
-/// 160, ...; the next iteration's first check is the taken back edge, and an
-/// empty string takes the entry branch.
+/// PUTS cost for a string of `len` non-zero words. Words 0-31 are read from
+/// the unmoved R0 with only R7 and R1 spilled; the check of word 31 is a taken
+/// BRnp over the exit block, so a 31-word string falls through to its exit.
+/// Longer strings switch to the 64-word stride loop, whose ADDs fall before
+/// words 32, 96, ... and whose back edges are the checks of words 95, 159, ....
 fn puts_cost(len: u64, c: Costs) -> u64 {
-    if len == 0 {
-        return 4 * c.m + c.a + c.b;
+    match len {
+        0 => 4 * c.m + c.a + c.b,
+        1..=30 => 7 * c.m + 2 * c.a + 1 + len * (2 * c.m + c.a),
+        31 => 7 * c.m + 2 * c.a + len * (2 * c.m + c.a),
+        _ => {
+            12 * c.m
+                + 2 * c.a
+                + len * (2 * c.m + c.a)
+                + 1
+                + c.a * ((len + 32) / 64)
+                + (len - 32) / 64
+                + u64::from(!(len - 31).is_multiple_of(64))
+        }
     }
-    let taken = (len - 1) / 64 + u64::from(!len.is_multiple_of(64));
-    12 * c.m + 2 * c.a + len * (2 * c.m + c.a) + (c.b - c.a) * taken + c.a * ((len + 32) / 64)
 }
 
 #[test]
 fn puts_prints_low_bytes_until_a_zero_word_at_34_cycles_per_character() {
     for len in [
-        0, 1, 2, 31, 32, 33, 63, 64, 65, 95, 96, 97, 127, 128, 129, 200, 500,
+        0, 1, 2, 7, 8, 30, 31, 32, 33, 63, 64, 65, 94, 95, 96, 159, 160, 200, 500,
     ] {
         let mut data: Vec<u16> = (0..len)
             .map(|i| (i as u16) << 8 | (0x41 + i as u16 % 26))
@@ -262,8 +272,8 @@ fn puts_prints_low_bytes_until_a_zero_word_at_34_cycles_per_character() {
     }
     let c = Costs::at(4);
     assert_eq!(
-        [0, 1, 32, 64, 65].map(|len| puts_cost(len, c)),
-        [69, 207, 1269, 2356, 2392]
+        [0, 1, 31, 32, 64, 200].map(|len| puts_cost(len, c)),
+        [69, 142, 1161, 1270, 2358, 7000]
     );
 }
 
