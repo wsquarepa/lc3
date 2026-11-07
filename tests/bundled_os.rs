@@ -399,27 +399,39 @@ fn putsp_prints_every_non_zero_high_byte() {
 }
 
 #[test]
-fn putsp_stops_at_a_nul_byte_in_either_half() {
-    let first = 0x6261;
+fn putsp_stops_at_a_nul_byte_in_either_half_at_every_unrolled_position() {
+    // The terminating word sits at every position of the eight-word block and
+    // once more in the next block, so every exit stub is reached: the low NUL
+    // with W[15] = 0 exits from the main chain, the other two terminators from
+    // the side blocks of gaps 27, 28 and 29.
     for n in [1, 4] {
         let c = Costs::at(n);
         let low_nul_sign_clear = c.m + 2 * c.a + c.b;
         let low_nul_sign_set = c.m + c.a + 2 * c.b;
         let high_nul = 3 * c.m + 7 * c.a + 3 * c.b;
-        for (tail, output, stop) in [
-            (0x4100, &b"ab"[..], low_nul_sign_clear),
-            (0x8100, &b"ab"[..], low_nul_sign_set),
-            (0x0043, &b"abC"[..], high_nul),
-        ] {
-            let data = [first, tail, 0x6465, 0x0000];
-            let (ours, cost) = trap_cost(LEA_R0_DATA, 0xf024, &data, &[], n);
-            assert_eq!(ours.program_output, output);
-            assert_eq!(
-                cost,
-                putsp_fixed_cost(c) + putsp_word_cost(3, c) + stop,
-                "PUTSP terminator {tail:04x} at N={n}"
-            );
-            assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
+        for printed in 0..16u64 {
+            for (tail, suffix, stop) in [
+                (0x4100, &b""[..], low_nul_sign_clear),
+                (0x8100, &b""[..], low_nul_sign_set),
+                (0x0043, &b"C"[..], high_nul),
+            ] {
+                let mut data = vec![0x6261; printed as usize];
+                data.extend([tail, 0x6465, 0x0000]);
+                let mut output = b"ab".repeat(printed as usize);
+                output.extend_from_slice(suffix);
+                let (ours, cost) = trap_cost(LEA_R0_DATA, 0xf024, &data, &[], n);
+                assert_eq!(ours.program_output, output);
+                assert_eq!(ours.registers.r[0], 0x3011);
+                assert_eq!(
+                    cost,
+                    putsp_fixed_cost(c)
+                        + printed * putsp_word_cost(3, c)
+                        + putsp_block_cost(printed, c)
+                        + stop,
+                    "PUTSP terminator {tail:04x} after {printed} words at N={n}"
+                );
+                assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
+            }
         }
     }
 }
