@@ -234,7 +234,10 @@ impl State {
                 return Err(Failure::CycleCapReached);
             }
             let pc = self.registers.pc;
-            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input, halt_address)?;
+            if pc == halt_address {
+                self.halt_started = true;
+            }
+            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input)?;
             self = next;
             cycles += cost;
             buckets[usize::from(owners[usize::from(pc)])] += cost;
@@ -250,10 +253,8 @@ impl State {
         mem_latency: NonZeroU32,
         budget: u64,
         input: &[u8],
-        halt_address: u16,
     ) -> Result<(Self, u64), Failure> {
         let pc = self.registers.pc;
-        self.halt_started |= pc == halt_address;
         let (state, word) = self.read(pc, input, pc)?;
         self = state;
         let instruction = Instruction::decode(word);
