@@ -330,6 +330,7 @@ Known improvements, not implemented:
 ## Known issues
 
 - Commit dbf1c2d does not pass the gate on its own: its tests expect the 64-word PUTS, while its fixture is still the maximal unroll. A failed `git add` split one change across dbf1c2d and 7bf3090, and history is not rewritten. It is a bisect hazard only; 7bf3090 and every later commit pass.
+- Commit dbf1c2d's subject ("resolve the reference os from the manifest dir") does not describe its content: that change landed only in 89ce635.
 
 ## Reproducing
 
