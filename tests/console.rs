@@ -402,7 +402,7 @@ fn halt_output_continues_across_returning_and_repeated_halt_traps() {
 }
 
 #[test]
-fn only_an_executed_exact_halt_trap_starts_halt_output_including_inside_the_os() {
+fn other_traps_start_halt_output_at_the_halt_entry_or_an_exact_halt_trap() {
     for word in [0xf040, 0xf024] {
         let prepared = prepare(
             &os(),
@@ -423,8 +423,8 @@ fn only_an_executed_exact_halt_trap_starts_halt_output_including_inside_the_os()
         let Outcome::Halted(result) = run(&prepared, &Case::default()) else {
             panic!("expected halted");
         };
-        assert_eq!(result.program_output, b"A");
-        assert!(result.halt_output.is_empty());
+        assert!(result.program_output.is_empty());
+        assert_eq!(result.halt_output, b"A");
     }
     let prepared = prepare(
         &os(),

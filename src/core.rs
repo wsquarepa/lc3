@@ -8,6 +8,7 @@ const DSR: u16 = 0xfe04;
 const DDR: u16 = 0xfe06;
 const MCR: u16 = 0xfffe;
 const MCR_RUNNING: u16 = 0x8000;
+const HALT_VECTOR: u16 = 0x0025;
 const CC_NEGATIVE: u16 = 0x0004;
 const CC_ZERO: u16 = 0x0002;
 const CC_POSITIVE: u16 = 0x0001;
@@ -196,6 +197,7 @@ impl State {
     /// state, total cycles and owner buckets, or a cap, decode or input failure.
     /// Trigger checks compile out when `WITH_TRIGGERS` is false; otherwise a
     /// 64 KiB pending table gives constant-time checks between trigger batches.
+    /// Captures the halt-routine address from x0025 before any triggers or fetches.
     pub(crate) fn execute<const WITH_TRIGGERS: bool>(
         mut self,
         mem_latency: NonZeroU32,
@@ -205,6 +207,7 @@ impl State {
         owners: &[u16],
         owner_count: usize,
     ) -> Result<(Self, u64, Vec<u64>), Failure> {
+        let halt_address = self.memory[usize::from(HALT_VECTOR)];
         let mut pending = if WITH_TRIGGERS {
             vec![false; MEMORY_WORDS]
         } else {
@@ -231,7 +234,7 @@ impl State {
                 return Err(Failure::CycleCapReached);
             }
             let pc = self.registers.pc;
-            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input)?;
+            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input, halt_address)?;
             self = next;
             cycles += cost;
             buckets[usize::from(owners[usize::from(pc)])] += cost;
@@ -247,8 +250,10 @@ impl State {
         mem_latency: NonZeroU32,
         budget: u64,
         input: &[u8],
+        halt_address: u16,
     ) -> Result<(Self, u64), Failure> {
         let pc = self.registers.pc;
+        self.halt_started |= pc == halt_address;
         let (state, word) = self.read(pc, input, pc)?;
         self = state;
         let instruction = Instruction::decode(word);

@@ -133,10 +133,17 @@ pub struct Halted {
     /// Console device writes and reads of KBSR, DSR and DDR leave their backing
     /// words unchanged; case and trigger pokes write them directly.
     pub memory: Box<[u16]>,
-    /// Console bytes written before the run first executes the word xF025.
+    /// Console bytes written before the first executed TRAP x25 (word xF025)
+    /// or first instruction fetch at the halt-routine address, whichever comes
+    /// first. The address is the word at x0025 after case pokes, before triggers
+    /// and the first instruction, and remains fixed for the run.
     pub program_output: Vec<u8>,
-    /// Console bytes written from the first executed TRAP x25 onward; empty
-    /// when the run writes the machine control register without executing xF025.
+    /// Console bytes written from the first executed TRAP x25 (word xF025)
+    /// or first instruction fetch at the halt-routine address onward, whichever
+    /// comes first. The address is the word at x0025 after case pokes, before
+    /// triggers and the first instruction, and remains fixed for the run.
+    /// A direct JSR into that address also starts halt output there. Empty when
+    /// the run writes the machine control register without either event.
     pub halt_output: Vec<u8>,
     pub cycles: u64,
     /// Full instruction costs by fetch address owner, summing to `cycles`.
@@ -277,8 +284,10 @@ fn load_ownership(mut owners: Box<[u16]>, image: &Image, owner: u16) -> Box<[u16
 /// unincremented PC. Counts include the halting instruction and exclude boot.
 /// Each successful KBDR read stores its zero-extended byte in backing memory.
 /// DDR reads return x0000, including instruction fetches.
-/// On halt, console bytes split into program output and halt output at the first
-/// executed word xF025, whether fetched from an image or the OS.
+/// On halt, console bytes split at the first executed word xF025 or first fetch
+/// at the halt-routine address, whichever comes first, whether in an image or
+/// the OS. The address is the word at x0025 after case pokes and before triggers
+/// or the first instruction, and remains fixed for the run.
 /// Illegal words fail before execution at their unincremented PC with zero cycle
 /// cost; a zero cycle cap fails before fetching any word.
 /// Case pokes apply before triggers, after loading; neither applies during boot.

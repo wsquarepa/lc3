@@ -97,11 +97,11 @@ The outcome of a run stopped for any other reason, carrying that reason.
 _Avoid_: error, crashed, rejected
 
 **Program output**:
-The console bytes written before the run first executes `TRAP x25`.
+The console bytes written before the first execution of `TRAP x25` or entry into the run's halt routine, whichever comes first.
 _Avoid_: stdout, console output
 
 **Halt output**:
-The console bytes written from the first `TRAP x25` onward.
+The console bytes written from the first execution of `TRAP x25` or entry into the run's halt routine onward, whichever comes first. Empty when a run halts directly without either event.
 _Avoid_: halt message, banner
 
 ### Compatibility
