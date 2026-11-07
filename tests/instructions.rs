@@ -203,7 +203,7 @@ fn fetch_from_mcr_always_sees_x8000() {
 
 #[test]
 fn other_addresses_in_the_device_region_are_ordinary_memory() {
-    for address in [0xfe00, 0xfe02, 0xfe04, 0xfe06, 0xfe08, 0xffff] {
+    for address in [0xfe01, 0xfe08, 0xffff] {
         let prepared = prepare(
             &os(),
             &[

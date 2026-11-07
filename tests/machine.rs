@@ -1,8 +1,13 @@
 mod common;
 
 use common::{halted, image, os};
-use lc3::{BootFailure, Case, Failure, IllegalKind, Outcome, PrepareError, prepare, run};
+use lc3::{
+    BootFailure, Case, Failure, Format, IllegalKind, Outcome, PrepareError, load, prepare, run,
+};
+use std::fs;
+use std::io::ErrorKind;
 use std::num::NonZeroU32;
+use std::path::Path;
 
 #[test]
 fn obj_runs_through_trap_halt_with_boot_cycles_excluded() {
@@ -22,7 +27,13 @@ fn obj_runs_through_trap_halt_with_boot_cycles_excluded() {
 fn zero_cycle_cap_stops_before_even_an_illegal_word() {
     let prepared = prepare(&os(), &[image(0x3000, &[0x8000])], latency()).unwrap();
     assert_eq!(
-        run(&prepared, &Case { cycle_cap: 0 }),
+        run(
+            &prepared,
+            &Case {
+                cycle_cap: 0,
+                ..Case::default()
+            }
+        ),
         Outcome::Failed(Failure::CycleCapReached)
     );
 }
@@ -69,7 +80,13 @@ fn illegal_instructions_report_the_offending_pc_and_word_without_cycle_cost() {
     for (word, kind) in [(0x8abc, IllegalKind::Rti), (0xddef, IllegalKind::Reserved)] {
         let prepared = prepare(&os(), &[image(0x3000, &[0x1021, word])], latency()).unwrap();
         assert_eq!(
-            run(&prepared, &Case { cycle_cap: 9 }),
+            run(
+                &prepared,
+                &Case {
+                    cycle_cap: 9,
+                    ..Case::default()
+                }
+            ),
             Outcome::Failed(Failure::IllegalInstruction {
                 pc: 0x3001,
                 word,
@@ -134,12 +151,24 @@ fn cap_rejects_equal_or_crossing_totals_including_the_halting_instruction() {
         let cost = 6 + 3 * u64::from(n);
         for cap in [0, 1, cost - 1, cost] {
             assert_eq!(
-                run(&prepared, &Case { cycle_cap: cap }),
+                run(
+                    &prepared,
+                    &Case {
+                        cycle_cap: cap,
+                        ..Case::default()
+                    }
+                ),
                 Outcome::Failed(Failure::CycleCapReached)
             );
         }
         for cap in [cost + 1, u64::MAX] {
-            let Outcome::Halted(halted) = run(&prepared, &Case { cycle_cap: cap }) else {
+            let Outcome::Halted(halted) = run(
+                &prepared,
+                &Case {
+                    cycle_cap: cap,
+                    ..Case::default()
+                },
+            ) else {
                 panic!("expected halted with cap {cap}");
             };
             assert_eq!(halted.cycles, cost);
@@ -154,13 +183,20 @@ fn cycle_cap_applies_to_the_running_total() {
     let prepared = prepare(&os(), &[image(0x3000, &[0x1021, 0xf025])], latency()).unwrap();
     let total = (4 + 4) + (5 + 2 * 4) + (6 + 3 * 4);
     assert_eq!(
-        run(&prepared, &Case { cycle_cap: total }),
+        run(
+            &prepared,
+            &Case {
+                cycle_cap: total,
+                ..Case::default()
+            }
+        ),
         Outcome::Failed(Failure::CycleCapReached)
     );
     let Outcome::Halted(halted) = run(
         &prepared,
         &Case {
             cycle_cap: total + 1,
+            ..Case::default()
         },
     ) else {
         panic!("expected halted");
@@ -181,12 +217,24 @@ fn a_case_is_identical_alone_and_after_other_cases() {
     let alone = run(&prepared, &case);
     assert!(matches!(alone, Outcome::Halted(_)));
     assert_eq!(
-        run(&prepared, &Case { cycle_cap: 10 }),
+        run(
+            &prepared,
+            &Case {
+                cycle_cap: 10,
+                ..Case::default()
+            }
+        ),
         Outcome::Failed(Failure::CycleCapReached)
     );
     assert_eq!(run(&prepared, &case), alone);
     assert_eq!(
-        run(&prepared, &Case { cycle_cap: 0 }),
+        run(
+            &prepared,
+            &Case {
+                cycle_cap: 0,
+                ..Case::default()
+            }
+        ),
         Outcome::Failed(Failure::CycleCapReached)
     );
     assert_eq!(run(&prepared, &case), alone);
@@ -215,4 +263,56 @@ fn prepared_is_shareable_and_runs_identically_from_several_threads() {
 
 fn latency() -> NonZeroU32 {
     NonZeroU32::new(4).unwrap()
+}
+
+#[test]
+fn reference_os_start_state_puts_getc_and_out_match_measured_behavior() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("reference/lc3tools/lc3os.obj");
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            eprintln!("skipping: reference OS not found at {}", path.display());
+            return;
+        }
+        Err(error) => panic!("cannot read reference OS at {}: {error}", path.display()),
+    };
+    let os = load(Format::Obj, &bytes).unwrap().image;
+    for (words, input, program_output, halt_output) in [
+        (vec![0xb000, 0xfffe], vec![], &b""[..], &b""[..]),
+        (
+            vec![0xe002, 0xf022, 0xf025, 0x0048, 0x0069, 0],
+            vec![],
+            &b"Hi"[..],
+            &b"\n\n--- halting the LC-3 ---\n\n"[..],
+        ),
+        (
+            vec![0xf020, 0xf021, 0xf025],
+            vec![0xff],
+            &b"\xff"[..],
+            &b"\n\n--- halting the LC-3 ---\n\n"[..],
+        ),
+    ] {
+        let direct_halt = words[0] == 0xb000;
+        let prepared = prepare(&os, &[image(0x3000, &words)], NonZeroU32::new(4).unwrap()).unwrap();
+        let Outcome::Halted(result) = run(
+            &prepared,
+            &Case {
+                input,
+                ..Case::default()
+            },
+        ) else {
+            panic!("expected halted under the reference OS");
+        };
+        assert_eq!(result.program_output, program_output);
+        assert_eq!(result.halt_output, halt_output);
+        if direct_halt {
+            assert_eq!(result.registers.r, [0, 0x7fff, 0, 0, 0, 0, 0, 0x0490]);
+            assert_eq!(result.registers.psr, 0x0002);
+            assert_eq!(
+                result.registers.pc.wrapping_sub(1),
+                0x3000,
+                "direct MCR halt advances the start PC by one"
+            );
+        }
+    }
 }

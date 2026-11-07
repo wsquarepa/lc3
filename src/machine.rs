@@ -11,8 +11,11 @@ pub struct Prepared {
     mem_latency: NonZeroU32,
 }
 
+/// Per-run console input bytes and cycle cap; input defaults to empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Case {
+    /// Console bytes consumed in order by KBDR reads; defaults to empty.
+    pub input: Vec<u8>,
     /// A run fails before executing an instruction whose cost would make the
     /// running total reach or exceed this cap, including a halting instruction.
     /// Zero permits no instructions to execute.
@@ -22,6 +25,7 @@ pub struct Case {
 impl Default for Case {
     fn default() -> Self {
         Self {
+            input: Vec::new(),
             cycle_cap: 10_000_000,
         }
     }
@@ -36,8 +40,15 @@ pub enum Outcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Halted {
     pub registers: Registers,
-    /// All 65,536 words, with the machine control register reading x8000.
+    /// All 65,536 backing words, with the machine control register reading x8000.
+    /// KBDR holds the last input byte read, zero-extended. Console device writes
+    /// and reads of KBSR, DSR and DDR leave their backing words unchanged.
     pub memory: Box<[u16]>,
+    /// Console bytes written before the run first executes the word xF025.
+    pub program_output: Vec<u8>,
+    /// Console bytes written from the first executed TRAP x25 onward; empty
+    /// when the run writes the machine control register without executing xF025.
+    pub halt_output: Vec<u8>,
     pub cycles: u64,
     pub mem_latency: NonZeroU32,
 }
@@ -51,6 +62,11 @@ pub struct Registers {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
+    /// KBDR was read after all console input bytes were consumed.
+    InputExhausted {
+        /// Address of the reading instruction, including instruction fetch.
+        pc: u16,
+    },
     CycleCapReached,
     IllegalInstruction {
         pc: u16,
@@ -81,8 +97,9 @@ pub enum PrepareError {
 /// Boots `os` from x0200, then loads nonempty `images` in order and selects the
 /// first origin. Image addresses wrap modulo x10000. Returns a shareable prepared
 /// machine, `PrepareError::NoImages` before boot for empty `images`, or
-/// `PrepareError::Boot` for a boot cap or an illegal word during boot.
-/// Boot uses a fixed 10,000,000-cycle cap and contributes no run cycles.
+/// `PrepareError::Boot` for a boot cap, an illegal word, or a KBDR read during boot.
+/// Boot uses empty console input and a fixed 10,000,000-cycle cap, and contributes
+/// no run cycles. Console bytes written during boot are discarded.
 pub fn prepare(
     os: &Image,
     images: &[Image],
@@ -92,7 +109,7 @@ pub fn prepare(
     let (boot_snapshot, _) = State::zeroed()
         .load_image(os)
         .start_at(0x0200)
-        .execute(mem_latency, BOOT_CYCLE_CAP)
+        .execute(mem_latency, BOOT_CYCLE_CAP, &[])
         .map_err(|reason| PrepareError::Boot(BootFailure { reason }))?;
     let snapshot = images
         .iter()
@@ -105,17 +122,25 @@ pub fn prepare(
 }
 
 /// Runs `case` on a private copy of `prepared`, returning final state on halt or
-/// `Outcome::Failed` with `CycleCapReached` or `IllegalInstruction`. Counts
-/// include the halting instruction and exclude boot.
+/// `Outcome::Failed` with `CycleCapReached`, `IllegalInstruction`, or
+/// `InputExhausted`. KBDR reads consume `case.input` bytes, including instruction
+/// fetches from KBDR; an exhausted read reports the fetching/reading instruction's
+/// unincremented PC. Counts include the halting instruction and exclude boot.
+/// Each successful KBDR read stores its zero-extended byte in backing memory.
+/// DDR reads return x0000, including instruction fetches.
+/// On halt, console bytes split into program output and halt output at the first
+/// executed word xF025, whether fetched from an image or the OS.
 pub fn run(prepared: &Prepared, case: &Case) -> Outcome {
     match prepared
         .snapshot
         .clone()
-        .execute(prepared.mem_latency, case.cycle_cap)
+        .execute(prepared.mem_latency, case.cycle_cap, &case.input)
     {
         Ok((state, cycles)) => Outcome::Halted(Halted {
             registers: state.registers,
             memory: state.memory,
+            program_output: state.program_output,
+            halt_output: state.halt_output,
             cycles,
             mem_latency: prepared.mem_latency,
         }),
