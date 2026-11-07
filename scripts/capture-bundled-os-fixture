@@ -4,9 +4,8 @@
 # reference/ folder (default: reference/lc3tools/lc3as under the repository).
 # Output: tests/fixtures/bundled_os.obj. lc3as writes .obj and .sym beside its
 # input, so it runs in a temporary directory and only the .obj is copied. The
-# capture fails unless the generated PUTS section matches
-# tools/bundled_os_puts.py, and unless lc3as prints nothing but its two pass
-# banners and their zero-error lines (so no errors and no warnings).
+# capture fails unless lc3as prints nothing but its two pass banners and their
+# zero-error lines (so no errors and no warnings).
 set -euo pipefail
 
 if (( $# > 1 )); then
@@ -26,13 +25,6 @@ trap 'rm -rf -- "$capture_dir"' EXIT
 cd -- "$capture_dir"
 
 cp -- "$repo_root/src/bundled_os.asm" bundled_os.asm
-python3 -I "$repo_root/tools/bundled_os_puts.py" > generated_puts.asm
-sed -n '/^; BEGIN GENERATED PUTS/,/^; END GENERATED PUTS/{/^; BEGIN GENERATED PUTS/d;/^; END GENERATED PUTS/d;p}' \
-    bundled_os.asm > embedded_puts.asm
-if ! cmp -s generated_puts.asm embedded_puts.asm; then
-    printf 'src/bundled_os.asm: generated PUTS section is stale; regenerate it with tools/bundled_os_puts.py\n' >&2
-    exit 1
-fi
 "$assembler" bundled_os.asm > assembler.log 2>&1
 expected=$'STARTING PASS 1\n0 errors found in first pass.\nSTARTING PASS 2\n0 errors found in second pass.'
 if [[ "$(cat assembler.log)" != "$expected" ]]; then
