@@ -1,0 +1,3 @@
+; An image with zero words.
+
+ FFFF ; origin without a prefix

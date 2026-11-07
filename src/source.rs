@@ -25,6 +25,10 @@ impl Image {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
     Obj,
+    /// UTF-8 lines of 16 binary digits, with spaces, tabs and `;` comments.
+    Bin,
+    /// UTF-8 lines of one to four hex digits, with an optional `x` or `X` prefix.
+    Hex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +57,14 @@ pub struct Loaded {
 pub fn load(format: Format, bytes: &[u8]) -> Result<Loaded, Vec<Diagnostic>> {
     match format {
         Format::Obj => load_obj(bytes),
+        Format::Bin => crate::convert::bin(bytes).map(|(origin, words)| Loaded {
+            image: Image { origin, words },
+            warnings: Vec::new(),
+        }),
+        Format::Hex => crate::convert::hex(bytes).map(|(origin, words)| Loaded {
+            image: Image { origin, words },
+            warnings: Vec::new(),
+        }),
     }
 }
 

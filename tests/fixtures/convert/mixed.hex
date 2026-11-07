@@ -1,0 +1,9 @@
+; Hex digits in either case, with and without prefixes.
+
+	x3000	; origin
+0
+Xf
+ aB ; two digits
+XABC
+xFFFF
+f025

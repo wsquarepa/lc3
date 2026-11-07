@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Usage: scripts/capture-convert-fixtures [path/to/reference/lc3tools/lc3convert]
+# Inputs: tests/fixtures/convert/*.bin and *.hex; requires the local git-excluded
+# reference/ folder containing the native lc3tools/lc3convert executable.
+# Outputs: matching .obj fixtures, captured in a temporary directory and copied
+# into tests/fixtures/convert/. No reference-generated source files are copied.
+set -euo pipefail
+
+if (( $# > 1 )); then
+    printf 'Usage: %s [path/to/reference/lc3tools/lc3convert]\n' "$0" >&2
+    exit 1
+fi
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+converter="${1:-"$repo_root/reference/lc3tools/lc3convert"}"
+if [[ ! -x "$converter" ]]; then
+    printf 'Missing executable: %s; supply the path to reference/lc3tools/lc3convert\n' "$converter" >&2
+    exit 1
+fi
+converter="$(realpath -- "$converter")"
+capture_dir="$(mktemp -d)"
+trap 'rm -rf -- "$capture_dir"' EXIT
+cd -- "$capture_dir"
+
+for source in "$repo_root"/tests/fixtures/convert/*.bin "$repo_root"/tests/fixtures/convert/*.hex; do
+    name="${source##*/}"
+    cp -- "$source" "$name"
+    case "$name" in
+        *.bin) "$converter" "$name" ;;
+        *.hex) "$converter" -b16 "$name" ;;
+    esac
+    cp -- "${name%.*}.obj" "$repo_root/tests/fixtures/convert/${name%.*}.obj"
+done

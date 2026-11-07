@@ -1,0 +1,7 @@
+; Spaced binary source with comments and blank lines.
+
+	 0011 0000	0000 0000 ; origin
+
+0001	0010 0011	0100
+	1010 1011	1100 1101	; mixed spacing
+1111 0000 0010 0101

@@ -1,3 +1,4 @@
+mod convert;
 mod core;
 mod machine;
 mod source;
