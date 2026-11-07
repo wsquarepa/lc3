@@ -1,4 +1,4 @@
-use crate::{Failure, IllegalKind, Image, Registers};
+use crate::{Failure, IllegalKind, Image, Pokes, Register, Registers, Trigger};
 use std::num::NonZeroU32;
 
 const MEMORY_WORDS: usize = 1 << 16;
@@ -118,6 +118,35 @@ impl State {
         self
     }
 
+    /// Returns state with memory then register pokes applied directly, without
+    /// device effects or cycles; memory addresses wrap and MCR writes are ignored.
+    pub(crate) fn apply_pokes(mut self, pokes: &Pokes) -> Self {
+        for poke in &pokes.memory {
+            let mut address = poke.address;
+            for &word in &poke.words {
+                if address != MCR {
+                    self.memory[usize::from(address)] = word;
+                }
+                address = address.wrapping_add(1);
+            }
+        }
+        for (register, value) in &pokes.registers {
+            match register {
+                Register::R0 => self.registers.r[0] = *value,
+                Register::R1 => self.registers.r[1] = *value,
+                Register::R2 => self.registers.r[2] = *value,
+                Register::R3 => self.registers.r[3] = *value,
+                Register::R4 => self.registers.r[4] = *value,
+                Register::R5 => self.registers.r[5] = *value,
+                Register::R6 => self.registers.r[6] = *value,
+                Register::R7 => self.registers.r[7] = *value,
+                Register::Pc => self.registers.pc = *value,
+                Register::Psr => self.registers.psr = *value,
+            }
+        }
+        self
+    }
+
     fn read(mut self, address: u16, input: &[u8], pc: u16) -> Result<(Self, u16), Failure> {
         if address >= KBSR {
             match address {
@@ -180,6 +209,43 @@ impl State {
         Ok((self, cycles))
     }
 
+    /// Runs with once-per-PC trigger batches before fetch and cycle-cap checks.
+    /// Returns halted state and cycles, or the same failures as plain execution.
+    /// A 64 KiB address table makes each instruction's trigger check constant-time;
+    /// the trigger list is scanned only when a pending address is reached.
+    pub(crate) fn execute_with_triggers(
+        mut self,
+        mem_latency: NonZeroU32,
+        cycle_cap: u64,
+        input: &[u8],
+        triggers: &[Trigger],
+    ) -> Result<(Self, u64), Failure> {
+        let mut pending = vec![false; MEMORY_WORDS];
+        for trigger in triggers {
+            pending[usize::from(trigger.pc)] = true;
+        }
+        let mut cycles = 0;
+        while !self.halted {
+            while pending[usize::from(self.registers.pc)] {
+                let pc = self.registers.pc;
+                pending[usize::from(pc)] = false;
+                for trigger in triggers.iter().filter(|trigger| trigger.pc == pc) {
+                    self = self.apply_pokes(&trigger.pokes);
+                }
+            }
+            if cycle_cap == 0 {
+                return Err(Failure::CycleCapReached);
+            }
+            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input)?;
+            self = next;
+            cycles += cost;
+        }
+        Ok((self, cycles))
+    }
+
+    // Keep instruction dispatch inside each loop: outlining it adds per-instruction
+    // state transfers across a call boundary, measurable even without triggers.
+    #[inline(always)]
     fn step(
         mut self,
         mem_latency: NonZeroU32,

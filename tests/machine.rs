@@ -2,7 +2,8 @@ mod common;
 
 use common::{halted, image, os};
 use lc3::{
-    BootFailure, Case, Failure, Format, IllegalKind, Outcome, PrepareError, load, prepare, run,
+    BootFailure, Case, Failure, Format, IllegalKind, MemoryPoke, Outcome, Pokes, PrepareError,
+    Register, Trigger, load, prepare, run,
 };
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -276,6 +277,408 @@ fn prepared_is_shareable_and_runs_identically_from_several_threads() {
 
 fn latency() -> NonZeroU32 {
     NonZeroU32::new(4).unwrap()
+}
+
+#[test]
+fn register_pokes_select_the_first_instruction_and_preserve_raw_psr_at_no_cycle_cost() {
+    let prepared = prepare(
+        &os(),
+        &[image(0x3000, &[0xd000, 0xb000, 0xfffe])],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        pokes: Pokes {
+            registers: vec![
+                (Register::R0, 0x1111),
+                (Register::R1, 0xffff),
+                (Register::R1, 0x2222),
+                (Register::R2, 0x3333),
+                (Register::R3, 0x4444),
+                (Register::R4, 0x5555),
+                (Register::R5, 0x6666),
+                (Register::R6, 0x7777),
+                (Register::R7, 0x8888),
+                (Register::Pc, 0x3001),
+                (Register::Psr, 0xabcd),
+            ],
+            ..Pokes::default()
+        },
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after register pokes");
+    };
+    assert_eq!(
+        result.registers.r,
+        [
+            0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888
+        ]
+    );
+    assert_eq!(result.registers.pc, 0x3002);
+    assert_eq!(result.registers.psr, 0xabcd);
+    assert_eq!(result.cycles, 18);
+    assert_eq!(Case::default().pokes, Pokes::default());
+    assert!(Pokes::default().registers.is_empty());
+    assert!(Pokes::default().memory.is_empty());
+    assert!(Case::default().triggers.is_empty());
+}
+
+#[test]
+fn memory_pokes_overlay_images_wrap_and_bypass_devices_at_no_cycle_cost() {
+    let prepared = prepare(&os(), &[image(0x3000, &[0xd000, 0xfffe])], latency()).unwrap();
+    let case = Case {
+        pokes: Pokes {
+            memory: vec![
+                MemoryPoke {
+                    address: 0x3000,
+                    words: vec![0xb000],
+                },
+                MemoryPoke {
+                    address: 0x4000,
+                    words: vec![1, 2, 3],
+                },
+                MemoryPoke {
+                    address: 0x4001,
+                    words: vec![0xbeef],
+                },
+                MemoryPoke {
+                    address: 0xfffd,
+                    words: vec![0x1111, 0, 0x3333, 0x4444],
+                },
+                MemoryPoke {
+                    address: 0xfe00,
+                    words: vec![0x1234, 0, 0xabcd, 0, 0x5678, 0, 0x0041],
+                },
+                MemoryPoke {
+                    address: 0x3000,
+                    words: vec![],
+                },
+            ],
+            ..Pokes::default()
+        },
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after memory pokes");
+    };
+    assert_eq!(&result.memory[0x4000..0x4003], &[1, 0xbeef, 3]);
+    assert_eq!(&result.memory[0xfffd..], &[0x1111, 0x8000, 0x3333]);
+    assert_eq!(result.memory[0], 0x4444);
+    assert_eq!(
+        &result.memory[0xfe00..0xfe07],
+        &[0x1234, 0, 0xabcd, 0, 0x5678, 0, 0x0041]
+    );
+    assert!(result.program_output.is_empty());
+    assert!(result.halt_output.is_empty());
+    assert_eq!(result.registers.pc, 0x3001);
+    assert_eq!(result.cycles, 18);
+}
+
+#[test]
+fn trigger_at_origin_follows_case_pokes_and_fires_once_across_loop_visits() {
+    let prepared = prepare(
+        &os(),
+        &[image(0x3000, &[0x1021, 0x127f, 0x03fd, 0xb400, 0xfffe])],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        pokes: Pokes {
+            registers: vec![(Register::R0, 100), (Register::R1, 3)],
+            ..Pokes::default()
+        },
+        triggers: vec![Trigger {
+            pc: 0x3000,
+            pokes: Pokes {
+                registers: vec![(Register::R0, 10)],
+                ..Pokes::default()
+            },
+        }],
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after the loop");
+    };
+    assert_eq!(result.registers.r[0], 13);
+    assert_eq!(result.registers.r[1], 0);
+    assert_eq!(result.cycles, 92);
+}
+
+#[test]
+fn triggers_at_one_pc_keep_list_order_before_following_a_poked_pc() {
+    let prepared = prepare(
+        &os(),
+        &[
+            image(0x3000, &[0xd000]),
+            image(0x3100, &[0x1021, 0xb400, 0xfffe]),
+        ],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        triggers: vec![
+            Trigger {
+                pc: 0x3100,
+                pokes: Pokes {
+                    registers: vec![(Register::R0, 30)],
+                    memory: vec![MemoryPoke {
+                        address: 0x4001,
+                        words: vec![3],
+                    }],
+                },
+            },
+            Trigger {
+                pc: 0x3000,
+                pokes: Pokes {
+                    registers: vec![(Register::R0, 10), (Register::Pc, 0x3100)],
+                    memory: vec![MemoryPoke {
+                        address: 0x4000,
+                        words: vec![1],
+                    }],
+                },
+            },
+            Trigger {
+                pc: 0x3000,
+                pokes: Pokes {
+                    registers: vec![(Register::R0, 20)],
+                    memory: vec![MemoryPoke {
+                        address: 0x4000,
+                        words: vec![2],
+                    }],
+                },
+            },
+        ],
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted at the poked PC");
+    };
+    assert_eq!(result.registers.r[0], 31);
+    assert_eq!(&result.memory[0x4000..0x4002], &[2, 3]);
+    assert_eq!(result.cycles, 26);
+}
+
+#[test]
+fn triggers_at_different_pcs_fire_in_execution_order_and_leave_runs_independent() {
+    let prepared = prepare(
+        &os(),
+        &[image(0x3000, &[0x1021, 0x1021, 0xb400, 0xfffe])],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        triggers: vec![
+            Trigger {
+                pc: 0x3001,
+                pokes: Pokes {
+                    registers: vec![(Register::R0, 20)],
+                    ..Pokes::default()
+                },
+            },
+            Trigger {
+                pc: 0x3000,
+                pokes: Pokes {
+                    registers: vec![(Register::R0, 10)],
+                    ..Pokes::default()
+                },
+            },
+        ],
+        ..Case::default()
+    };
+    let prepared_before = prepared.clone();
+    let case_before = case.clone();
+    let alone = run(&prepared, &case);
+    let Outcome::Halted(result) = &alone else {
+        panic!("expected halted after both triggers");
+    };
+    assert_eq!(result.registers.r[0], 21);
+    assert_eq!(result.cycles, 34);
+    assert_eq!(run(&prepared, &case), alone);
+    assert_eq!(
+        run(
+            &prepared,
+            &Case {
+                cycle_cap: 9,
+                ..case.clone()
+            }
+        ),
+        Outcome::Failed(Failure::CycleCapReached)
+    );
+    assert_eq!(run(&prepared, &case), alone);
+    assert_eq!(prepared, prepared_before);
+    assert_eq!(case, case_before);
+}
+
+#[test]
+fn triggers_change_the_next_instruction_before_its_cycle_cap_check() {
+    let prepared = prepare(
+        &os(),
+        &[image(0x3000, &[0x1021, 0xd000, 0xfffe])],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        cycle_cap: 9,
+        triggers: vec![Trigger {
+            pc: 0x3001,
+            pokes: Pokes {
+                memory: vec![MemoryPoke {
+                    address: 0x3001,
+                    words: vec![0xb000],
+                }],
+                ..Pokes::default()
+            },
+        }],
+        ..Case::default()
+    };
+    assert_eq!(
+        run(&prepared, &case),
+        Outcome::Failed(Failure::CycleCapReached)
+    );
+    let Outcome::Halted(result) = run(
+        &prepared,
+        &Case {
+            cycle_cap: 27,
+            ..case
+        },
+    ) else {
+        panic!("expected halted after the triggered instruction replacement");
+    };
+    assert_eq!(result.cycles, 26);
+}
+
+#[test]
+fn boot_never_applies_case_pokes_or_consumes_triggers_at_boot_pcs() {
+    let mut words = vec![0; 0x21];
+    words[..3].copy_from_slice(&[0x221f, 0xba00, 0xfffe]);
+    words[0x20] = 5;
+    let prepared = prepare(
+        &image(0x0200, &words),
+        &[image(0x3000, &[0xb000, 0xfffe])],
+        latency(),
+    )
+    .unwrap();
+    let mut case = Case {
+        pokes: Pokes {
+            memory: vec![MemoryPoke {
+                address: 0x0220,
+                words: vec![9],
+            }],
+            ..Pokes::default()
+        },
+        triggers: vec![Trigger {
+            pc: 0x0200,
+            pokes: Pokes {
+                memory: vec![MemoryPoke {
+                    address: 0x0220,
+                    words: vec![99],
+                }],
+                ..Pokes::default()
+            },
+        }],
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted with the trigger unreached");
+    };
+    assert_eq!(result.registers.r[1], 5);
+    assert_eq!(result.memory[0x0220], 9);
+    assert_eq!(result.cycles, 18);
+    case.pokes.registers.push((Register::Pc, 0x0200));
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after revisiting the boot PC");
+    };
+    assert_eq!(result.registers.r[1], 99);
+    assert_eq!(result.memory[0x0220], 99);
+    assert_eq!(result.cycles, 31);
+}
+
+#[test]
+fn pc_trigger_cycles_terminate_after_each_batch_fires_once() {
+    let prepared = prepare(&os(), &[image(0x3000, &[0xb000, 0xfffe])], latency()).unwrap();
+    let case = Case {
+        triggers: vec![
+            Trigger {
+                pc: 0x3100,
+                pokes: Pokes {
+                    registers: vec![(Register::Pc, 0x3000)],
+                    ..Pokes::default()
+                },
+            },
+            Trigger {
+                pc: 0x3000,
+                pokes: Pokes {
+                    registers: vec![(Register::Pc, 0x3100)],
+                    ..Pokes::default()
+                },
+            },
+        ],
+        ..Case::default()
+    };
+    assert_eq!(run(&prepared, &case), run(&prepared, &Case::default()));
+}
+
+#[test]
+fn poked_psr_uses_low_condition_bits_and_keyboard_pokes_do_not_consume_input() {
+    let prepared = prepare(
+        &os(),
+        &[image(
+            0x3000,
+            &[0x0201, 0xd000, 0xa002, 0xb202, 0xd000, 0xfe02, 0xfffe],
+        )],
+        latency(),
+    )
+    .unwrap();
+    let case = Case {
+        input: vec![0x80],
+        pokes: Pokes {
+            registers: vec![(Register::Psr, 0x8001)],
+            memory: vec![MemoryPoke {
+                address: 0xfe02,
+                words: vec![0xabcd],
+            }],
+        },
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after a branch and keyboard read");
+    };
+    assert_eq!(result.registers.r[0], 0x80);
+    assert_eq!(result.memory[0xfe02], 0x80);
+    assert_eq!(result.registers.psr, 0x8001);
+    assert_eq!(result.cycles, 45);
+}
+
+#[test]
+fn memory_poke_arrays_can_wrap_more_than_once() {
+    let prepared = prepare(&os(), &[image(0x3000, &[0xd000])], latency()).unwrap();
+    let mut words = vec![0; 65_538];
+    words[0] = 1;
+    words[65_536] = 2;
+    words[65_537] = 3;
+    let case = Case {
+        pokes: Pokes {
+            memory: vec![
+                MemoryPoke {
+                    address: 0x2000,
+                    words,
+                },
+                MemoryPoke {
+                    address: 0x3000,
+                    words: vec![0xb000, 0xfffe],
+                },
+            ],
+            ..Pokes::default()
+        },
+        ..Case::default()
+    };
+    let Outcome::Halted(result) = run(&prepared, &case) else {
+        panic!("expected halted after wrapping memory pokes");
+    };
+    assert_eq!(&result.memory[0x2000..0x2002], &[2, 3]);
+    assert_eq!(result.memory[0xfffe], 0x8000);
+    assert_eq!(result.cycles, 18);
 }
 
 #[test]
