@@ -705,6 +705,61 @@ x5007 = 65535
     );
 }
 
+fn assert_memory_overlap_rejected(memory: &str, expected: &[&str]) {
+    assert_run_file_error(
+        &format!("images = [\"halt.asm\"]\n[memory]\n{memory}"),
+        expected,
+    );
+}
+
+#[test]
+fn overlapping_memory_entries_in_one_table_are_rejected() {
+    assert_memory_overlap_rejected(
+        "x4000 = [1, 2, 3]\nx4001 = 7\n",
+        &["x4000", "x4001", "x4001"],
+    );
+    assert_memory_overlap_rejected(
+        "x4001 = 7\nx4000 = [1, 2, 3]\n",
+        &["x4000", "x4001", "x4001"],
+    );
+    assert_memory_overlap_rejected("x4000 = 1\n\"#16384\" = 2\n", &["x4000", "#16384", "x4000"]);
+    assert_memory_overlap_rejected(
+        "xFFFE = [1, 2, 3]\nx0000 = 9\n",
+        &["xFFFE", "x0000", "x0000"],
+    );
+    assert_run_file_error(
+        "images = [\"halt.asm\"]\n[[at]]\npc = 1\n[at.memory]\nx10 = [1, 2]\nx11 = 3\n",
+        &["[[at]] entry 1", "x10", "x11", "x0011"],
+    );
+}
+
+#[test]
+fn non_overlapping_memory_is_independent_of_key_order_and_top_level_may_overlap_triggers() {
+    let sandbox = Sandbox::new();
+    sandbox.write("halt.asm", HALT_ASM);
+    let dump = "dump = [\"x4000..x4003\"]\n";
+    let forward = "[memory]\nx4000 = [1, 2]\nx4002 = [3, 4]\n";
+    let reverse = "[memory]\nx4002 = [3, 4]\nx4000 = [1, 2]\n";
+    for memory in [forward, reverse] {
+        sandbox.write(
+            "run.toml",
+            format!("images = [\"halt.asm\"]\n{dump}{memory}"),
+        );
+        let (output, value) = sandbox.json(&["run.toml", "--json"], b"");
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert_eq!(value["dumps"][0]["words"], json!([1, 2, 3, 4]));
+    }
+    sandbox.write(
+        "run.toml",
+        format!(
+            "images = [\"halt.asm\"]\n{dump}{forward}[[at]]\npc = 12288\n[at.memory]\nx4000 = 9\n"
+        ),
+    );
+    let (output, value) = sandbox.json(&["run.toml", "--json"], b"");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(value["dumps"][0]["words"], json!([9, 2, 3, 4]));
+}
+
 #[test]
 fn source_errors_exit_two_with_file_and_line_before_any_run() {
     let sandbox = Sandbox::new();

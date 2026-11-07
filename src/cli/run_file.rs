@@ -351,13 +351,46 @@ fn convert_pokes(
     };
     let registers = convert_registers(registers.map_or_else(Vec::new, |pairs| pairs.0))
         .map_err(|problem| format!("{prefix}[registers]: {problem}"))?;
-    let memory = memory
-        .map_or_else(Vec::new, |pairs| pairs.0)
-        .into_iter()
-        .map(|(key, words)| convert_memory(&key, words))
-        .collect::<Result<_, _>>()
+    let memory = convert_memory_table(memory.map_or_else(Vec::new, |pairs| pairs.0))
         .map_err(|problem| format!("{prefix}[memory]: {problem}"))?;
     Ok(Pokes { registers, memory })
+}
+
+/// Converts one `[memory]` table. TOML does not define key order, so entries
+/// whose word ranges overlap (counting wrap from xFFFF to x0000) are rejected
+/// rather than resolved by order.
+fn convert_memory_table(pairs: Vec<(String, Words)>) -> Result<Vec<MemoryPoke>, String> {
+    let keyed = pairs
+        .into_iter()
+        .map(|(key, words)| convert_memory(&key, words).map(|poke| (key, poke)))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, (first_key, first)) in keyed.iter().enumerate() {
+        for (second_key, second) in &keyed[index + 1..] {
+            if let Some(address) = first_overlap(first, second) {
+                return Err(format!(
+                    "keys `{first_key}` and `{second_key}` both write x{address:04X}; split them into non-overlapping entries"
+                ));
+            }
+        }
+    }
+    Ok(keyed.into_iter().map(|(_, poke)| poke).collect())
+}
+
+/// The first address written by both pokes, if any. Two circular ranges
+/// overlap exactly when one's start lies inside the other.
+fn first_overlap(first: &MemoryPoke, second: &MemoryPoke) -> Option<u16> {
+    let inside = |start: u16, poke: &MemoryPoke| {
+        usize::from(start.wrapping_sub(poke.address)) < poke.words.len()
+    };
+    if first.words.is_empty() || second.words.is_empty() {
+        None
+    } else if inside(second.address, first) {
+        Some(second.address)
+    } else if inside(first.address, second) {
+        Some(first.address)
+    } else {
+        None
+    }
 }
 
 fn convert_registers(pairs: Vec<(String, Scalar)>) -> Result<Vec<(Register, u16)>, String> {
@@ -473,28 +506,32 @@ mod tests {
     }
 
     #[test]
-    fn pokes_keep_document_order_and_negative_words_wrap() {
+    fn pokes_parse_in_every_literal_form_and_negative_words_wrap() {
         let spec = parse_ok(
             "images = [\"a.asm\"]\n[registers]\nr1 = 1\nPSR = \"x8002\"\nR0 = -1\n[memory]\nx4000 = [1, \"#-2\"]\n\"#10\" = \"xFFFF\"\n",
         );
+        let mut registers = spec.pokes.registers;
+        registers.sort_by_key(|(_, word)| *word);
         assert_eq!(
-            spec.pokes.registers,
+            registers,
             vec![
                 (Register::R1, 1),
                 (Register::Psr, 0x8002),
                 (Register::R0, 0xFFFF)
             ]
         );
+        let mut memory = spec.pokes.memory;
+        memory.sort_by_key(|poke| poke.address);
         assert_eq!(
-            spec.pokes.memory,
+            memory,
             vec![
-                MemoryPoke {
-                    address: 0x4000,
-                    words: vec![1, 0xFFFE]
-                },
                 MemoryPoke {
                     address: 10,
                     words: vec![0xFFFF]
+                },
+                MemoryPoke {
+                    address: 0x4000,
+                    words: vec![1, 0xFFFE]
                 },
             ]
         );
@@ -556,6 +593,50 @@ mod tests {
         let message = parse_err("images = [\"a\"]\n[memory]\nx3000 = [0, 65536]\n");
         assert!(
             message.contains("x3000") && message.contains("65536"),
+            "{message}"
+        );
+    }
+
+    fn overlap_message(memory: &str) -> String {
+        parse_err(&format!("images = [\"a\"]\n[memory]\n{memory}"))
+    }
+
+    #[test]
+    fn overlapping_memory_entries_are_rejected_naming_keys_and_address() {
+        let message = overlap_message("x4000 = [1, 2, 3]\nx4001 = 7\n");
+        assert!(
+            message.contains("x4000") && message.contains("x4001"),
+            "{message}"
+        );
+        let message = overlap_message("x4000 = 1\n\"#16384\" = 2\n");
+        assert!(
+            message.contains("#16384") && message.contains("x4000"),
+            "{message}"
+        );
+        let message = overlap_message("xFFFF = [1, 2]\nx0000 = 9\n");
+        assert!(
+            message.contains("x0000") && message.contains("xFFFF"),
+            "{message}"
+        );
+        let message = overlap_message("x0000 = [1, 2]\nxFFFF = [5, 6, 7]\n");
+        assert!(message.contains("both write x0000"), "{message}");
+    }
+
+    #[test]
+    fn adjacent_empty_and_trigger_memory_entries_do_not_overlap() {
+        let spec = parse_ok(
+            "images = [\"a\"]\n[memory]\nx4000 = [1, 2]\nx4002 = 3\nxFFFF = []\nx4001 = []\n[[at]]\npc = 1\n[at.memory]\nx4000 = 9\n",
+        );
+        assert_eq!(spec.pokes.memory.len(), 4);
+        assert_eq!(spec.triggers[0].pokes.memory.len(), 1);
+    }
+
+    #[test]
+    fn overlap_inside_a_trigger_table_is_rejected() {
+        let message =
+            parse_err("images = [\"a\"]\n[[at]]\npc = 1\n[at.memory]\nx10 = [1, 2]\nx11 = 3\n");
+        assert!(
+            message.contains("[[at]] entry 1") && message.contains("x0011"),
             "{message}"
         );
     }
