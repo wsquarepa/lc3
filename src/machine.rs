@@ -42,6 +42,24 @@ pub enum Register {
     Psr,
 }
 
+impl Register {
+    /// Returns the position of a general-purpose register in `Registers::r`
+    /// (0 for R0 up to 7 for R7), or `None` for `Pc` and `Psr`.
+    pub fn index(&self) -> Option<usize> {
+        match self {
+            Self::R0 => Some(0),
+            Self::R1 => Some(1),
+            Self::R2 => Some(2),
+            Self::R3 => Some(3),
+            Self::R4 => Some(4),
+            Self::R5 => Some(5),
+            Self::R6 => Some(6),
+            Self::R7 => Some(7),
+            Self::Pc | Self::Psr => None,
+        }
+    }
+}
+
 /// Backing words written upward from an address, wrapping modulo x10000.
 /// Device addresses have no side effects. A poke of xFFFE has no effect because
 /// the machine control register always reads x8000. An empty word list does nothing.

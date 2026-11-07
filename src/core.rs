@@ -134,17 +134,10 @@ impl State {
             }
         }
         for (register, value) in &pokes.registers {
-            match register {
-                Register::R0 => self.registers.r[0] = *value,
-                Register::R1 => self.registers.r[1] = *value,
-                Register::R2 => self.registers.r[2] = *value,
-                Register::R3 => self.registers.r[3] = *value,
-                Register::R4 => self.registers.r[4] = *value,
-                Register::R5 => self.registers.r[5] = *value,
-                Register::R6 => self.registers.r[6] = *value,
-                Register::R7 => self.registers.r[7] = *value,
-                Register::Pc => self.registers.pc = *value,
-                Register::Psr => self.registers.psr = *value,
+            match (register.index(), register) {
+                (Some(index), _) => self.registers.r[index] = *value,
+                (None, Register::Pc) => self.registers.pc = *value,
+                (None, _) => self.registers.psr = *value,
             }
         }
         self

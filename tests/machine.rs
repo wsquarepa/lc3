@@ -1032,3 +1032,22 @@ fn reference_os_start_state_puts_getc_and_out_match_measured_behavior() {
         }
     }
 }
+
+#[test]
+fn register_index_numbers_general_registers_and_excludes_pc_and_psr() {
+    let general = [
+        Register::R0,
+        Register::R1,
+        Register::R2,
+        Register::R3,
+        Register::R4,
+        Register::R5,
+        Register::R6,
+        Register::R7,
+    ];
+    for (expected, register) in general.iter().enumerate() {
+        assert_eq!(register.index(), Some(expected));
+    }
+    assert_eq!(Register::Pc.index(), None);
+    assert_eq!(Register::Psr.index(), None);
+}
