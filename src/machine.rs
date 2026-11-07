@@ -3,6 +3,7 @@ use crate::{Image, bundled_os};
 use std::num::NonZeroU32;
 
 const BOOT_CYCLE_CAP: u64 = 10_000_000;
+const BOOT_MEM_LATENCY: NonZeroU32 = NonZeroU32::MIN;
 const MAX_IMAGES: usize = u16::MAX as usize - 1;
 
 /// An immutable boot snapshot with images loaded, ready for independent runs.
@@ -261,8 +262,10 @@ pub enum PrepareError {
 /// machine, `PrepareError::NoImages` before boot for empty `images`, or
 /// `PrepareError::Boot` for a boot cap, an illegal word, or a KBDR read during boot.
 /// More than 65,534 images returns `PrepareError::TooManyImages` before boot.
-/// Boot uses empty console input and a fixed 10,000,000-cycle cap, and contributes
-/// no run cycles. Console bytes written during boot are discarded.
+/// Boot uses empty console input and a fixed 10,000,000-cycle cap measured at
+/// memory latency 1 whatever `mem_latency` is, so the cap bounds the same amount
+/// of boot work at every latency; it contributes no run cycles. Console bytes
+/// written during boot are discarded.
 /// Ownership is fixed by load order, including MCR and wrapping addresses; later
 /// images override earlier images and the OS. Boot writes do not change ownership.
 pub fn prepare(
@@ -293,7 +296,7 @@ pub fn prepare(
         .load_image(os)
         .start_at(0x0200)
         .execute::<false>(
-            mem_latency,
+            BOOT_MEM_LATENCY,
             BOOT_CYCLE_CAP,
             &[],
             &[],

@@ -111,6 +111,31 @@ fn boot_reports_the_fixed_cycle_cap() {
 }
 
 #[test]
+fn boot_cap_means_the_same_at_every_memory_latency() {
+    const HUGE_LATENCY: u32 = 100_000;
+    let prepared = prepare(
+        lc3::bundled_os(),
+        &[image(0x3000, &[0xf025])],
+        NonZeroU32::new(HUGE_LATENCY).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        run(&prepared, &Case::default()),
+        Outcome::Halted(_)
+    ));
+    assert_eq!(
+        prepare(
+            &image(0x0200, &[0x0fff]),
+            &[image(0x3000, &[0xf025])],
+            NonZeroU32::new(HUGE_LATENCY).unwrap()
+        ),
+        Err(PrepareError::Boot(BootFailure {
+            reason: Failure::CycleCapReached
+        }))
+    );
+}
+
+#[test]
 fn illegal_instructions_report_the_offending_pc_and_word_without_cycle_cost() {
     for (word, kind) in [(0x8abc, IllegalKind::Rti), (0xddef, IllegalKind::Reserved)] {
         let prepared = prepare(&os(), &[image(0x3000, &[0x1021, word])], latency()).unwrap();
