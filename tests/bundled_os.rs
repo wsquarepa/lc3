@@ -160,6 +160,14 @@ fn bundled_os_sits_in_system_space_and_boot_fills_the_trap_vector_table() {
             assert_eq!(entry, 0xfffe, "unassigned vector x{vector:02x}");
         }
     }
+    let mut assigned = after_boot.memory[0x20..=0x25].to_vec();
+    assigned.sort_unstable();
+    assigned.dedup();
+    assert_eq!(
+        assigned.len(),
+        6,
+        "each assigned vector has its own routine"
+    );
     assert!(
         after_boot.memory[0x0100..0x0200]
             .iter()
@@ -218,19 +226,75 @@ fn in_echoes_the_byte_and_a_linefeed_without_the_prompt_in_99_cycles() {
     assert_eq!(7 * Costs::at(1).m + Costs::at(1).a, 54);
 }
 
-/// PUTS cost for a string of `len` non-zero words: a 64-word loop body with
-/// one stride ADD, entered at offset 0, so the ADDs fall before words 32, 96,
-/// 160, ...; an empty string takes the entry branch.
+/// Words per PUTS loop iteration: 19 stride blocks of 64.
+const PUTS_UNROLLED: u64 = 1216;
+
+/// Address of the BRz testing word `word` (1..=PUTS_UNROLLED) relative to the
+/// PUTS loop body: three words per character plus one stride ADD before each
+/// word 32 + 64k. PUTS_EXIT sits 16 words before the body; PUTS_STUB two words
+/// after the last check.
+fn puts_check(word: u64) -> i64 {
+    (3 * word + (word + 32) / 64) as i64 - 1
+}
+
+/// Hops a zero word's taken BRz needs to reach an exit. Each hop is one more
+/// taken BRz on a check within branch reach (back 255, forward 256): either a
+/// backward chain to PUTS_EXIT or a forward chain to PUTS_STUB, whichever has
+/// at most two hops fewer (the stub's LD and JMP cost M + A, which is 2 to 3
+/// branches at N = 1 and N = 4).
+fn puts_exit_route(word: u64) -> (u64, bool) {
+    let back = |mut word: u64| {
+        let mut hops = 0;
+        while puts_check(word) - 255 > -16 {
+            let reach = puts_check(word) - 255;
+            word = (1..=word).find(|&k| puts_check(k) >= reach).unwrap();
+            hops += 1;
+        }
+        hops
+    };
+    let forward = |mut word: u64| {
+        let mut hops = 0;
+        while puts_check(word) + 256 < puts_check(PUTS_UNROLLED) + 2 {
+            let reach = puts_check(word) + 256;
+            word = (word..=PUTS_UNROLLED)
+                .rev()
+                .find(|&k| puts_check(k) <= reach)
+                .unwrap();
+            hops += 1;
+        }
+        hops
+    };
+    let (back, forward) = (back(word), forward(word));
+    if back <= forward + 2 {
+        (back, false)
+    } else {
+        (forward, true)
+    }
+}
+
+/// PUTS cost for a string of `len` non-zero words; an empty string takes the
+/// entry branch.
 fn puts_cost(len: u64, c: Costs) -> u64 {
     if len == 0 {
         return 4 * c.m + c.a + c.b;
     }
-    let taken = (len - 1) / 64 + u64::from(!len.is_multiple_of(64));
-    12 * c.m + 2 * c.a + len * (2 * c.m + c.a) + (c.b - c.a) * taken + c.a * ((len + 32) / 64)
+    let position = match len % PUTS_UNROLLED {
+        0 => PUTS_UNROLLED,
+        position => position,
+    };
+    let (hops, via_stub) = puts_exit_route(position);
+    15 * c.m
+        + 2 * c.a
+        + len * (2 * c.m + c.a)
+        + c.a * ((len + 32) / 64)
+        + c.a * ((len - 1) / PUTS_UNROLLED)
+        + (c.b - c.a)
+        + c.b * hops
+        + if via_stub { c.m + c.a } else { 0 }
 }
 
 #[test]
-fn puts_prints_low_bytes_until_a_zero_word_at_34_cycles_per_character() {
+fn puts_prints_low_bytes_until_a_zero_word_at_about_34_cycles_per_character() {
     for len in [
         0, 1, 2, 31, 32, 33, 63, 64, 65, 95, 96, 97, 127, 128, 129, 200,
     ] {
@@ -253,8 +317,8 @@ fn puts_prints_low_bytes_until_a_zero_word_at_34_cycles_per_character() {
     }
     let c = Costs::at(4);
     assert_eq!(
-        [0, 1, 32, 64, 65].map(|len| puts_cost(len, c)),
-        [69, 207, 1269, 2356, 2392]
+        [0, 1, 64, 1216, 1217].map(|len| puts_cost(len, c)),
+        [69, 246, 2396, 41729, 41750]
     );
 }
 
