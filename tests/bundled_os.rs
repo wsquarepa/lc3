@@ -15,7 +15,6 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
 
-const BUNDLED_OS_OBJ: &[u8] = include_bytes!("fixtures/bundled_os.obj");
 /// The reference OS inside the git-excluded reference folder, relative to the
 /// package root; where it is absent the comparisons are skipped visibly.
 const REFERENCE_OS: &str = "reference/lc3tools/lc3os.obj";
@@ -59,7 +58,6 @@ fn image(origin: u16, words: &[u16]) -> Image {
 }
 
 fn bundled() -> Image {
-    let _ = BUNDLED_OS_OBJ;
     lc3::bundled_os().clone()
 }
 
