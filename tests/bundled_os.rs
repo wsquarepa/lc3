@@ -351,6 +351,35 @@ fn putsp_costs_per_word_class_as_a_function_of_length() {
 }
 
 #[test]
+fn putsp_prints_every_non_zero_high_byte() {
+    // One word per high byte 1..=255 reads every non-zero entry of PUTSP's
+    // high-byte table; the low byte stays non-zero so no word stops early.
+    let words: Vec<u16> = (1..=0xffu16).map(|high| high << 8 | 0x41).collect();
+    let mut data = words.clone();
+    data.push(0x0000);
+    let expected: Vec<u8> = words
+        .iter()
+        .flat_map(|&word| [word as u8, (word >> 8) as u8])
+        .collect();
+    for n in [1, 4] {
+        let c = Costs::at(n);
+        let (ours, cost) = trap_cost(LEA_R0_DATA, 0xf024, &data, &[], n);
+        assert_eq!(ours.program_output, expected, "PUTSP output at N={n}");
+        assert_eq!(ours.registers.r[0], 0x3011);
+        let words_cost: u64 = words
+            .iter()
+            .map(|&word| putsp_word_cost(word >> 13, c))
+            .sum();
+        assert_eq!(
+            cost,
+            putsp_fixed_cost(c) + words_cost + c.m + 2 * c.a + c.b,
+            "PUTSP over all high bytes at N={n}"
+        );
+        assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
+    }
+}
+
+#[test]
 fn putsp_stops_at_a_nul_byte_in_either_half() {
     let c = Costs::at(4);
     let low_nul_sign_clear = c.m + 2 * c.a + c.b;
