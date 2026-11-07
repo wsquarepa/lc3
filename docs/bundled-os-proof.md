@@ -1,6 +1,6 @@
 # Bundled OS: design and optimality proof
 
-This document fixes the bundled OS's placement, gives every TRAP routine's exact cycle count, and proves each count optimal or bounds it. Source: `src/bundled_os.asm`. Tests: `tests/bundled_os.rs`. Tools: `tools/bundled_os_search.py` (lower-bound search; output in `docs/bundled-os-search-output.txt`) and `tools/bundled_os_puts.py` (generates the unrolled PUTS section).
+This document fixes the bundled OS's placement, gives every TRAP routine's exact cycle count, and proves each count optimal or bounds it. Source: `src/bundled_os.asm`. Tests: `tests/bundled_os.rs`. Tools: `tools/bundled_os_search.py` (lower-bound search; output in `docs/bundled-os-search-output.txt`).
 
 ## Results
 
@@ -22,10 +22,10 @@ A routine's cost runs from the TRAP fetch through the instruction that returns, 
 | IN | 7M + A | 99 | 54 | optimal (argument and search) |
 | HALT | 19M + 11A | 335 | 188 | optimal (search) |
 | PUTS, L = 0 | 4M + A + B | 69 | 39 | |
-| PUTS, L >= 1 | see "PUTS" | 207 + 34L + ... | 114 + 19L + ... | slope optimal among all designs that fit |
+| PUTS, L >= 1 | 12M + 2A + L(2M + A) + ... (see "PUTS") | 207 at L=1, 2356 at L=64 | 114, 1315 | not proven optimal at every L; what is proven is under "PUTS" |
 | PUTSP | see "PUTSP" | 259 + per word | 142 + per word | best known; proven lower bound, gap documented |
 
-No optimum differs between N=1 and N=4. Each argument below holds at both latencies, and the search runs at both. The one choice that compares costs across N (PUTS exit routing) gives the same rule at N=1 and N=4.
+No proven optimum differs between N=1 and N=4. Each argument below holds at both latencies, and the search runs at both.
 
 ## Memory layout
 
@@ -60,11 +60,12 @@ Page 522: "Addresses xFE00 through xFFFF have been allocated to represent the ad
 | x0320, x032D, x0368 | 3 | HALT's LEA address labels (contents unused) |
 | x0369-x0386 | 30 | HALT and its base constant |
 | rest of gap 1 | 215 | free |
-| gaps after rows 2-30 | 7192 | free (29 gaps of 248 words) |
-| x2109-x2F76 | 3694 | PUTS (constants, epilogue, prologue, 1216-word unrolled body, exit stub) |
-| x2F77-x2FFF | 137 | free |
+| x0409-x04DC | 212 | PUTS (constants and slots, prologue, 64-word body, epilogue) |
+| x04DD-x0500 | 36 | free (end of gap 2) |
+| gaps after rows 3-30 | 6944 | free (28 gaps of 248 words) |
+| x2109-x2FFF | 3831 | free (above the image) |
 
-That is 4118 words of code and data, 3 address labels, and 7655 free words. The free words are scattered: no free run is longer than 248 words except the top 137 and the end of gap 0. Why PUTS cannot profit from them is proved under "PUTS".
+The image is x0200-x2108 (7945 words). That is 636 words of code and data, 3 address labels, and 11137 free words: 7306 inside the image and 3831 above it.
 
 ## General lemmas
 
@@ -131,54 +132,108 @@ Lower bound. Forced: TRAP (M), 16 DDR stores and one MCR store (at least M each,
 
 ## PUTS
 
-### Design
+### Design (shipped)
 
-One loop iteration prints 1216 words (19 blocks of 64).
+The 64-word loop with a stride register. The user chose it over the maximal unroll after seeing the crossover analysis below.
 
-- **Registers.** R0 = pointer, R7 = current word, R1 = xFE0A (DDR base), R2 = 64 (stride), R3 = the body's address. LDR offsets -32..31 cover each 64-word window, and one `ADD R0,R0,R2` per window advances it; the first window of a call starts at offset 0. The iteration closes with `JMP R3`, since the 3667-word body is beyond any branch's reach.
-- **Per character.** `STR R7,R1,#-4`, then `LDR` and `BRz` for the next word, so the check is not taken for non-zero words.
-- **Exits.** The zero word's BRz is taken. When the epilogue is out of reach, it lands on another check's BRz, which is taken again (branches leave Z set). Chains run backward to `PUTS_EXIT` for words 1-708 (at most 8 hops), and forward to `PUTS_STUB` (`LD R7; JMP R7`, then the epilogue) for words 709-1216 (at most 5 hops). Each check takes whichever direction is cheaper. With B per hop and M + A for the stub, the rule is "backward when its hops are at most two more than the forward hops", and it is the same at N=1 and N=4.
-- **Empty string.** It exits on the prologue's taken BRz, so every non-empty string gets the not-taken branch (the tie ruling).
+- **Registers.** R0 = pointer, R7 = current word, R1 = xFE0A (DDR base), R2 = 64 (stride). These, with the return address and the string start saved, are set up after the first check, so an empty string skips them.
+- **Loop body (193 words).** `STR R7,R1,#-4`, then `LDR` and `BRz` for the next word, so the check is not taken for non-zero words. LDR offsets 0..31, then `ADD R0,R0,R2`, then offsets -32..-1. The next iteration's first check, `BRnp PUTS_LOOP`, is the back edge.
+- **Exits.** Every check's exit (`BRz PUTS_END`) is within branch reach. The final `BRnp` falls through into `PUTS_END` when the zero word is at offset 0.
+- **Empty string.** It exits on the prologue's taken BRz (the tie ruling).
 
 ### Exact cost
 
-For L >= 1, with q = L mod 1216 (or 1216 when that is 0):
-
 ```
-T(L) = 14M + 3A + L(2M + A) + A*floor((L + 32) / 64) + A*floor((L - 1) / 1216)
-       + 1 + B*hops(q) + [forward route](M + A)
+T(0) = 4M + A + B
+T(L) = 12M + 2A + L(2M + A) + A*floor((L + 32) / 64) + floor((L - 1) / 64) + [64 does not divide L],  L >= 1
 ```
 
-hops(q) and the route follow the chain rule above; `tests/bundled_os.rs` re-derives them independently. T(0) = 4M + A + B. Examples at N=4: T(0) = 69, T(1) = 241, T(64) = 2391, T(1216) = 41724, T(1217) = 41745. At N=1: 39, 133, 1337, 23325, 23337. The tests check 22 lengths from 0 to 2600 at both latencies, which crosses two iteration boundaries.
+The two floor terms count the ADDs (before words 32, 96, 160, ...) and the taken back edges; the bracket is the taken exit.
 
-### Slope optimality among all designs that fit
+| L | 0 | 1 | 32 | 64 | 65 | 100 | 200 |
+|---|---|---|---|---|---|---|---|
+| N=4 | 69 | 207 | 1269 | 2356 | 2392 | 3590 | 7000 |
+| N=1 | 39 | 114 | 708 | 1315 | 1336 | 2006 | 3913 |
 
-The objective is the per-character marginal cost first and the fixed cost second. The shipped slope is 2M + A + A·20/1216: 34.13158 at N=4 and 19.08224 at N=1. That is optimal among all PUTS designs that fit the OS region, with PUTSP's table and the other routines as given. Proof:
+`tests/bundled_os.rs` checks 17 lengths from 0 to 500 at both latencies.
 
-1. **Per character, at least 2M + A.** Each word needs a load: LDR (M). LD has a fixed address, and LDI needs its pointer cell updated per word, costing at least I + M. Each word also needs a DDR store (at least M), and an instruction whose behavior depends on that word before its byte is stored (at least A). Without such an instruction, the zero and non-zero cases would store the same byte. Redirecting stores by data instead of branching also costs an ALU op per word.
-2. **Per 64 characters, at least one more A.** An LDR addresses base + offset with the offset in [-32, 31], so each distinct base value covers at most 64 consecutive words. Each new base value is a register write (at least A, L1) distinct from the loads, stores and checks. Loaded words are data and cannot serve as bases. That gives at least A per 64 words, exactly A/64 per character only when the words per iteration are a multiple of 64.
-3. **Closing the loop.**
-   - **Branches only.** A program processing L words executes at least 3L instructions that advance PC by one, and the PC stays inside the region. Taken branches move PC back at most 255 words, so they must be at least (3L - Range)/256 in number, each costing at least 1 cycle more than a not-taken check. As L grows, that is at least 3/256 per character. The slope is then at least 2M + A + A/64 + 3/256: 34.1368 (N=4) and 19.0899 (N=1), above the shipped slope.
-   - **A register jump** (JMP/JSRR/RET/TRAP, at least A) per iteration. A straight run of code is confined to one contiguous free region, because crossing a table row costs a taken transfer, or 8A to execute its NOP-valued words. The largest such region is x2109-x2FFF (3831 words), and an iteration whose runs lie in it handles U ≤ 3831/3 words. Its slope is at least 2M + A + A·ceil(U/64)/U + A/U. Adding runs in table gaps (at most 248 words) costs at least 1 cycle per run of at most 82 words, plus the stride ADDs: at least 1/82 + A/64 per character, above the shipped average. So the best single-run design has U = 64j words with 3U + j + 1 ≤ 3831 (the body plus its JMP), which gives j ≤ 19. j = 20 needs 3861 words.
-   - **U not a multiple of 64.** For U in (1216, 1270], the slope is 2M + A + 21A/U ≥ 2M + A + 21A/1270 (34.13228 / 19.08268), worse than j = 19.
-   - **JSR back edges** (reach 1023) cost B as extra instructions, at least 3B/1023 per character, which is worse again.
-   - So j = 19 is the optimum. The shipped design meets it exactly: per iteration, 19 ADDs and one JMP, and nothing else beyond the per-character work.
-4. **Floor without integrality.** Relaxing the integrality gives the floor 2M + A + A/64 + 3A/3831: 34.13126 (N=4) and 19.08204 (N=1). The 0.0003 cycles per character between that floor and the shipped slope comes entirely from rounding to whole blocks.
+### Objective
 
-Fixed cost (second). Five loop registers hold the pointer, word, base, stride and body address. Together with the return address, the string start and the six entry values of R1-R6, that is 13 values for 8 registers. So at least five 16-bit values (return address, string start, and three of R1-R6) make a round trip: 10M (L6). The base costs M (L4). The stride (64) costs M: it is not LEA-reachable, and at least five ALU ops would build it. The body address costs A (LEA). With the TRAP, the first load, the first check and RET, that totals 14M + 3A, which the prologue and epilogue meet. The exit term is L-dependent. Greedy farthest-reach chaining minimizes the hop count in each direction, and each check takes the cheaper direction.
+Minimum cycles for realistic string lengths (user decision). This replaces "marginal cost first, fixed cost second", under which the maximal unroll below would win asymptotically.
 
-### Alternatives (for comparison; all at the same layout)
+### What is proven
 
-| Design | T(L), L >= 1 | Slope N=4 | Slope N=1 | Words |
-|---|---|---|---|---|
-| rolled, 1 word per iteration | 9M + 2A - 1 + L(2M + 2A + 1) | 43 | 25 | ~12 |
-| 15 per block, one `ADD #15` | 9M + 2A + 1 + L(2M + A) + (A+1)floor(L/15) - 2[15 divides L] | 34.600 | 19.400 | ~55 |
-| 64 per iteration, stride register, BR back edge | 12M + 2A + L(2M + A) + A floor((L+32)/64) + floor((L-1)/64) + [64 does not divide L] | 34.1406 | 19.0938 | ~205 |
-| shipped: 1216 per iteration, JMP back edge | above | 34.13158 | 19.08224 | 3694 |
+**P1. A lower bound for every design that fits, at every L.** For L >= 1:
 
-The 64-word design beats the 15-word one for every L above 104 (N=4) and 74 (N=1). The shipped design costs more fixed cycles (14M + 3A plus exit hops, against 12M + 2A). It is cheaper than the 64-word design from L = 4865 (N=4) and 2369 (N=1) onward, and dearer below those lengths, with the order alternating near them. This is the direct consequence of "marginal cost first" combined with the ruling to unroll as far as space allows. It is noted in the report.
+```
+LB(L) = 4M + 2A + L(2M + A) + min(L(N + 1), 3M) + [L >= 32](2M + A*ceil((L - 31) / 64))
+```
 
-A larger PUTS would need a smaller PUTSP table. A 16-row table (one more tree level in PUTSP, at least A + A per word there) would free about 3840 contiguous words and allow j = 39, a slope of 2M + A + 40A/2496: 0.0034 cycles per character better at N=4. Under the ruling, PUTS's budget is the region minus PUTSP's needs, so PUTSP's table stays.
+and LB(0) = 4M + A + B. The terms:
+
+- TRAP (M) and RET (A).
+- L + 1 loads of string words (LDR, M) and L + 1 word-dependent instructions (at least A each; PUTS step "per character" below).
+- L DDR stores, each STR off a base (M) or STI (I = M + N + 1).
+- The word needs a register while R7 holds the return address and R0 the string start, so one 16-bit value makes a round trip (2M, L6).
+- Using a base at all costs its creation (M, L4) plus one more register's round trip (2M). So mixing STI and STR costs at least min(L(N+1), 3M) over all-STR.
+- A string of 33 or more words cannot be reached from R0 with offsets 0..31, so it needs at least one pointer value per further 64 words (A each). It also needs a second preserved value, the string start or an R1-R6 original, so one more round trip (2M).
+
+The bound holds against every analyzed design at every L from 0 to 5000 (checked numerically).
+
+Gap of the shipped design, T(L) - LB(L):
+
+| L | 0 | 1 | 5 | 10 | 31 | 32 | 64 | 100 | 200 | 1000 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| N=4 | 0 | 100 | 80 | 66 | 66 | 40 | 39 | 41 | 43 | 55 |
+| N=1 | 0 | 55 | 47 | 37 | 36 | 22 | 21 | 23 | 25 | 37 |
+
+The gap for long strings is the stride register's save, restore and load (3M), which LB does not charge, plus one taken back edge per 64 words. For short strings it is the setup (base, stride, two extra round trips) paid before the first character.
+
+**P2. Slope.**
+
+1. *Per character, at least 2M + A.* Each word needs a load: LDR (M). LD has a fixed address, and LDI needs its pointer cell updated per word, costing at least I + M. Each word also needs a DDR store (at least M) and an instruction whose behavior depends on that word before its byte is stored (at least A); otherwise the zero and non-zero cases would store the same byte. Redirecting stores by data instead of branching also costs an ALU op per word.
+2. *Per 64 characters, at least one more A.* An LDR addresses base + offset with the offset in [-32, 31], so each distinct base value covers at most 64 consecutive words. Each new base value is a register write (at least A) distinct from the loads, stores and checks.
+3. *Universal floor.* Steps 1 and 2 give 2M + A + A/64 per character for any design. The shipped slope is 2M + A + (A + 1)/64: 34.1406 (N=4), 19.0938 (N=1), within 1/64 cycle per character of the floor.
+4. *Best among single-branch loops.* Among designs whose iteration closes with one taken conditional branch, which is what lets the per-word check double as the back edge, 64 words is optimal. A body of U words needs 3U + ceil(U/64) words, at most 256 for the branch's reach, so U ≤ 84. Its overhead is (A·ceil(U/64) + 1)/U per character, minimized at U = 64.
+
+**P3. Fixed cost within the design's class.** Designs that hold a DDR base and a stride register for the whole non-empty call need four loop registers: pointer, word, base, stride. With the return address, the string start and the six R1-R6 originals, that is 12 values for 8 registers, so four make round trips (8M). Adding the base (M), the stride (M; 64 is not LEA-reachable), the TRAP (M), the first load (M), the first check (A) and RET (A) gives 12M + 2A, which the shipped prologue and epilogue meet. An empty string pays only 4M + A + B, which equals LB(0).
+
+**P4. Not optimal at every L against all fitting designs.** It is not, and this is shown by examples. Every comparison design below follows the contract and fits the gaps:
+
+| Design | T(L), L >= 1 |
+|---|---|
+| STI-offsets: STI per store, R0 never moves (L ≤ 31 only), only R7 spilled | 4M + 2A + 1 + L(I + M + A) |
+| STI with `ADD #15` blocks: R7 and R0 spilled | 6M + 2A + 1 + L(I + M + A) + (A+1)floor(L/15) - 2[15 divides L] |
+| base with `ADD #15` blocks (commit 8bc2c16) | 9M + 2A + 1 + L(2M + A) + (A+1)floor(L/15) - 2[15 divides L] |
+| maximal unroll (commit 82b3334) | see "Rejected alternative" |
+
+Against these, the shipped design is the cheapest exactly at the following lengths (computed for every L up to 12000):
+
+- **N=4:** L = 0, 90-95 and 105-4864.
+- **N=1:** L = 0 and 75-2368.
+
+Below those ranges the STI or ADD-#15 designs are cheaper; at L = 1 the STI-offsets design costs 108 (N=4), one cycle above LB(1) = 107. Above the ranges the maximal unroll is cheaper, alternating with the shipped design up to L = 10521 (N=4) and 5572 (N=1).
+
+Inside those ranges, optimality against *all* fitting designs is not proven. The per-length optimum is a lower envelope over different designs. For example, a variant that runs the first words without the stride setup and enters the 64-word loop later saves that setup for short strings but pays at least a jump (B) or more expensive exits for long ones, so it does not dominate the shipped design. The provable statements are P1-P3.
+
+### Rejected alternative: maximal unroll (user decision)
+
+Commits 7a8a35c and 82b3334 shipped the unrolled design:
+
+- **Body.** 1216 words per iteration (19 stride blocks), filling x2109-x2F76 above the table, with a `JMP R3` back edge (R3 = body address, built with LEA).
+- **Exits.** They chain through the body's own checks, taken again because branches leave Z set: backward to the epilogue, or forward to a stub that jumps there.
+- **Cost.** T(L) = 14M + 3A + L(2M + A) + A·floor((L+32)/64) + A·floor((L-1)/1216) + 1 + exit(L mod 1216), where the exit costs at most 8 hops of B backward, or 5 hops plus M + A forward.
+- **Slope.** 2M + A + 20A/1216: 34.13158 (N=4), 19.08224 (N=1).
+
+Its slope is optimal among all designs that fit with PUTSP's table as given, by this argument:
+
+- Code that only branches must move PC back at least 3 words per character with taken branches of reach 255, which is at least 3/256 cycles per character.
+- A register back edge costs A per iteration.
+- An iteration's straight run is confined to the 3831-word contiguous region, and runs in 248-word table gaps cost at least 1/82 + A/64 per character.
+- So the best design has U = 64j with 3U + j + 1 ≤ 3831, which gives j = 19.
+- The floor without integrality is 2M + A + A/64 + 3A/3831: 34.13126 (N=4), 19.08204 (N=1).
+
+It was rejected because it is dearer than the shipped design for every L below 4865 (N=4) and 2369 (N=1). Its fixed cost is higher (14M + 3A plus exit hops of up to about 70 cycles), its image is 11639 words, and its source is a 4000-line generated section. Its asymptotic gain is about 0.009 cycles per character.
 
 ## PUTSP
 
@@ -208,7 +263,7 @@ Per word printing both bytes, with h ≥ x20: at least **4M + 8A** plus A/64 amo
 1. One load of W (M) and two DDR stores (at least M each, L3).
 2. **Table lookup costs at least 2A + M.** By L5, h reaches a printed low byte only through branches or data-dependent addresses. A table address derived from W carries h-information only in bits 8-15 (L5), so a table that distinguishes 2^k values of h spans at least 2^k pages. The allowed region has 46 pages (x02-x2F), and the vector-table page is fixed data. So k ≤ 5, achieved only by bits 8-12 (32 pages); any other bit set spans more than 46 pages. Building the address needs at least two ALU ops: one to remove W's other bits (AND), and one to move pages x00-x01 into the region, since no single op does both. That is 2A, then the table load (M).
 3. **At least 4A of branches and 2A of CC-setting writes.** The bits W[15:13] (8 cases) and the low-byte NUL decision (2 cases) must be resolved by branches: 16 outcomes need at least 4 two-way branches on the worst path. Each CC-setting write yields at most 3 outcomes (N, Z, P). The load of W supplies one 2-way setting, because Z only arises for W = 0. 2·3^s ≥ 16 needs s ≥ 2 more writes, each at least A and each W-dependent. They are distinct from the table-address ops, whose CC carries only bits 8-12.
-4. The pointer advance costs at least A/64 per word (PUTS step 2).
+4. The pointer advance costs at least A/64 per word (PUTS, P2 step 2).
 5. For 0 < h < x20 (t = 0), "h = 0?" is one more decision: at least one more A.
 
 The best class of the shipped design (t = 3) costs 4M + 9A + B = 4M + 10A + 1, so the gap is 2A + 1 (17 at N=4). It comes from three sources: the per-word pointer ADD, one CC-setting write more than the bound (the low-byte test is separate from the tree), and the taken bit-14 branch. Other classes add their rejoin branch (B) and taken tree branches.
@@ -221,7 +276,7 @@ The best class of the shipped design (t = 3) costs 4M + 9A + B = 4M + 10A + 1, s
 | Full 8-level branch tree, LEA leaves, no table (about 1300 words) | about 204 | slower than the tree plus table |
 | 3-level tree plus 32-row table (shipped) | 133-149 | |
 | 2-level tree plus 64-row table | | does not fit the region (64 pages > 46) |
-| 4-level tree plus 16-row table | about 16 more per word | frees space only PUTS could use, at 0.0034 cycles/char |
+| 4-level tree plus 16-row table | about 16 more per word | slower; the space it frees is not needed |
 
 Known improvements, not implemented:
 
@@ -241,7 +296,7 @@ Known improvements, not implemented:
 ## Reproducing
 
 ```
-scripts/capture-bundled-os-fixture <path to native lc3as>   # checks the generated PUTS section, assembles with no diagnostics
+scripts/capture-bundled-os-fixture <path to native lc3as>   # assembles with no diagnostics
 cargo test --test bundled_os                                 # contract and exact cycles at N=1 and N=4
 python3 tools/bundled_os_search.py                           # lower-bound search; asserts minima equal the tested costs
 ```
