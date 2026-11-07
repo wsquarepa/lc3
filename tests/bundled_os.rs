@@ -299,11 +299,11 @@ fn puts_prints_a_nul_low_byte_from_a_non_zero_word() {
 /// Cost of one PUTSP word that prints both bytes, by its bits 15:13.
 fn putsp_word_cost(class: u16, c: Costs) -> u64 {
     let (a, b) = match class {
-        0 => (11, 1),
-        1 | 4 => (9, 2),
-        2 | 5 | 6 => (8, 3),
-        3 => (9, 1),
-        7 => (7, 4),
+        0 => (8, 3),
+        1 | 2 | 4 => (8, 2),
+        3 => (9, 0),
+        5 | 6 => (7, 3),
+        7 => (6, 4),
         _ => unreachable!("a word class is three bits"),
     };
     4 * c.m + a * c.a + b * c.b
@@ -311,13 +311,19 @@ fn putsp_word_cost(class: u16, c: Costs) -> u64 {
 
 /// Prologue and register restore of PUTSP, excluding the words.
 fn putsp_fixed_cost(c: Costs) -> u64 {
-    18 * c.m + 2 * c.a + c.b
+    19 * c.m + c.a
+}
+
+/// Pointer advance and back edge after every eighth word, paid after word 7,
+/// 15, ... even when the word that follows terminates the string.
+fn putsp_block_cost(printed_words: u64, c: Costs) -> u64 {
+    printed_words / 8 * (c.a + c.b)
 }
 
 #[test]
 fn putsp_costs_per_word_class_as_a_function_of_length() {
     for class in 0..8u16 {
-        for len in [0u16, 1, 2, 5] {
+        for len in [0u16, 1, 2, 5, 7, 8, 9, 16, 17] {
             let mut data: Vec<u16> = (0..len)
                 .map(|i| class << 13 | (1 + i % 31) << 8 | (0x41 + i % 26))
                 .collect();
@@ -334,21 +340,30 @@ fn putsp_costs_per_word_class_as_a_function_of_length() {
                 let terminator = c.m + 2 * c.a + c.b;
                 assert_eq!(
                     cost,
-                    putsp_fixed_cost(c) + u64::from(len) * putsp_word_cost(class, c) + terminator,
+                    putsp_fixed_cost(c)
+                        + u64::from(len) * putsp_word_cost(class, c)
+                        + putsp_block_cost(u64::from(len), c)
+                        + terminator,
                     "PUTSP class {class:03b} L={len} N={n}"
                 );
                 assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
             }
         }
     }
-    let c = Costs::at(4);
-    assert_eq!(putsp_fixed_cost(c), 259);
-    assert_eq!(
-        (0..8)
-            .map(|class| putsp_word_cost(class, c))
-            .collect::<Vec<_>>(),
-        [149, 142, 143, 133, 142, 143, 143, 144]
-    );
+    for (n, fixed, block, per_class) in [
+        (4, 255, 17, [143, 134, 134, 124, 134, 135, 135, 136]),
+        (1, 138, 11, [86, 80, 80, 73, 80, 81, 81, 82]),
+    ] {
+        let c = Costs::at(n);
+        assert_eq!(putsp_fixed_cost(c), fixed);
+        assert_eq!(putsp_block_cost(8, c), block);
+        assert_eq!(
+            (0..8)
+                .map(|class| putsp_word_cost(class, c))
+                .collect::<Vec<_>>(),
+            per_class
+        );
+    }
 }
 
 #[test]
@@ -373,7 +388,12 @@ fn putsp_prints_every_non_zero_high_byte() {
             .sum();
         assert_eq!(
             cost,
-            putsp_fixed_cost(c) + words_cost + c.m + 2 * c.a + c.b,
+            putsp_fixed_cost(c)
+                + words_cost
+                + putsp_block_cost(words.len() as u64, c)
+                + c.m
+                + 2 * c.a
+                + c.b,
             "PUTSP over all high bytes at N={n}"
         );
         assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
@@ -382,21 +402,27 @@ fn putsp_prints_every_non_zero_high_byte() {
 
 #[test]
 fn putsp_stops_at_a_nul_byte_in_either_half() {
-    let c = Costs::at(4);
-    let low_nul_sign_clear = c.m + 2 * c.a + c.b;
-    let low_nul_sign_set = c.m + c.a + 2 * c.b;
-    let high_nul = 3 * c.m + 9 * c.a + c.b;
     let first = 0x6261;
-    for (tail, output, stop) in [
-        (0x4100, &b"ab"[..], low_nul_sign_clear),
-        (0x8100, &b"ab"[..], low_nul_sign_set),
-        (0x0043, &b"abC"[..], high_nul),
-    ] {
-        let data = [first, tail, 0x6465, 0x0000];
-        let (ours, cost) = trap_cost(LEA_R0_DATA, 0xf024, &data, &[], 4);
-        assert_eq!(ours.program_output, output);
-        assert_eq!(cost, putsp_fixed_cost(c) + putsp_word_cost(3, c) + stop);
-        assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
+    for n in [1, 4] {
+        let c = Costs::at(n);
+        let low_nul_sign_clear = c.m + 2 * c.a + c.b;
+        let low_nul_sign_set = c.m + c.a + 2 * c.b;
+        let high_nul = 3 * c.m + 7 * c.a + 3 * c.b;
+        for (tail, output, stop) in [
+            (0x4100, &b"ab"[..], low_nul_sign_clear),
+            (0x8100, &b"ab"[..], low_nul_sign_set),
+            (0x0043, &b"abC"[..], high_nul),
+        ] {
+            let data = [first, tail, 0x6465, 0x0000];
+            let (ours, cost) = trap_cost(LEA_R0_DATA, 0xf024, &data, &[], n);
+            assert_eq!(ours.program_output, output);
+            assert_eq!(
+                cost,
+                putsp_fixed_cost(c) + putsp_word_cost(3, c) + stop,
+                "PUTSP terminator {tail:04x} at N={n}"
+            );
+            assert_matches_reference(&ours, LEA_R0_DATA, 0xf024, &data, &[], b"");
+        }
     }
 }
 

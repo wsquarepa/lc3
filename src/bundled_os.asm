@@ -12,9 +12,12 @@
 ; table (x0100-x01FF) or the device page (xFE00-xFFFF).
 ;
 ; Layout: PUTSP's table occupies eight words at the start of each of 32
-; consecutive 256-word rows (x0201-x2108). GETC, OUT, IN, PUTSP and HALT live
-; in the first two gaps between rows; PUTS, too long for a gap, sits just
-; above the table.
+; consecutive 256-word rows (x0201-x2108). Boot, GETC, OUT, IN and HALT live
+; in the first two gaps between rows; PUTSP, unrolled eight words per
+; iteration, spans gaps 27-29 (x1D9B-x1FCC); PUTS, too long for a gap, sits
+; just above the table. PUTSP's copies are generated: regenerate this file
+; with `python3 tools/bundled_os_generate.py src/bundled_os.asm` after
+; editing anything the generator emits.
 ;
 ; Device registers are out of PC-relative reach, so a routine reaches them
 ; either through a pointer (LDI/STI) or through a base register holding
@@ -39,7 +42,9 @@ HIGH_TABLE
 
 ; Boot (uncounted) starts at x0200, which branches here past the first
 ; table row. It fills the trap vector table with UNKNOWN_TRAP, points the six
-; assigned vectors at their routines, and halts. R0 is zero on entry.
+; assigned vectors at their routines, and halts. R0 is zero on entry. The
+; table is never written again: UnknownTrap relies on every unassigned vector
+; holding the sentinel for the whole run.
 BOOT	LD R1,UNKNOWN_TRAP
 	LD R2,VECTOR_COUNT
 BOOT_FILL
@@ -56,7 +61,7 @@ BOOT_FILL
 	STR R1,R0,#2
 	LEA R1,TRAP_IN
 	STR R1,R0,#3
-	LEA R1,TRAP_PUTSP
+	LD R1,PUTSP_VECTOR	; TRAP_PUTSP is beyond LEA reach of boot
 	STR R1,R0,#4
 	LD R1,HALT_VECTOR	; TRAP_HALT is beyond LEA reach of boot
 	STR R1,R0,#5
@@ -78,152 +83,26 @@ TRAP_OUT
 ; prompt is omitted). R7 is spilled so that it can hold DDR_NL, which serves
 ; as the device base for all three accesses and as the linefeed itself.
 TRAP_IN
-	ST R7,SAVE_R7
+	ST R7,IN_R7
 	LD R7,DDR_NL
 	LDR R0,R7,#-8		; KBDR
 	STR R0,R7,#-4		; echo
 	STR R7,R7,#-4		; '\n' from the base's low byte
-	LD R7,SAVE_R7
+	LD R7,IN_R7
 	RET
 
-
-; PUTSP: print each word's low byte, then its high byte, stopping at the first
-; NUL byte in either position; R0 restored.
-;
-; The high byte h cannot reach a register's low byte by arithmetic (carries
-; only propagate upward), so it is found by a 3-level branch tree on W[15:13]
-; followed by a table lookup on W[12:8]: HIGH_TABLE + (W & x1F00) + W[15:13]
-; holds h, with x0000 for h = 0.
-;
-; Registers: R0 = pointer, R7 = word W, R1 = DDR_NL, R2 = x00FF,
-; R3 = x1F00, R4 = HIGH_TABLE, R5 = shifted copy of W or the low-byte test.
-; Leaf names give W[15:13]. Leaf 011 (h = x60-x7F, lower-case ASCII) falls
-; through into the next word; every other leaf branches back.
-TRAP_PUTSP
-	ST R7,SAVE_R7
-	ST R0,SAVE_R0
-	ST R1,SAVE_R1
-	ST R2,SAVE_R2
-	ST R3,SAVE_R3
-	ST R4,SAVE_R4
-	ST R5,SAVE_R5
-	LD R1,DDR_NL
-	LD R2,LOW_MASK
-	LD R3,HIGH_MASK
-	LEA R4,HIGH_TABLE
-	BRnzp PUTSP_WORD
-PUTSP_01
-	ADD R5,R5,R5		; sign = W[13]
-	BRzp PUTSP_010
-PUTSP_011
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#3
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-PUTSP_WORD
-	LDR R7,R0,#0		; sign = W[15]
-	BRn PUTSP_1
-	AND R5,R7,R2
-	BRz PUTSP_EXIT		; low byte NUL
-	STR R7,R1,#-4
-	ADD R5,R7,R7		; sign = W[14]
-	BRn PUTSP_01
-	ADD R5,R5,R5		; sign = W[13]
-	BRn PUTSP_001
-PUTSP_000
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#0
-	BRz PUTSP_EXIT		; high byte NUL: only possible when W[15:13] = 0
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_001
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#1
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_010
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#2
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_1
-	AND R5,R7,R2
-	BRz PUTSP_EXIT		; low byte NUL
-	STR R7,R1,#-4
-	ADD R5,R7,R7		; sign = W[14]
-	BRn PUTSP_11
-	ADD R5,R5,R5		; sign = W[13]
-	BRn PUTSP_101
-PUTSP_100
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#4
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_101
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#5
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_11
-	ADD R5,R5,R5		; sign = W[13]
-	BRn PUTSP_111
-PUTSP_110
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#6
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_111
-	AND R7,R7,R3
-	ADD R7,R7,R4
-	LDR R7,R7,#7
-	STR R7,R1,#-4
-	ADD R0,R0,#1
-	BRnzp PUTSP_WORD
-PUTSP_EXIT
-	LD R5,SAVE_R5
-	LD R4,SAVE_R4
-	LD R3,SAVE_R3
-	LD R2,SAVE_R2
-	LD R1,SAVE_R1
-	LD R0,SAVE_R0
-	LD R7,SAVE_R7
-	RET
-
-
-; Constants and spill slots, placed between the routines so that every LD and
-; ST that uses them is in PC-relative range. TRAP routines never call each
-; other, so they share one set of spill slots.
 DDR_NL		.FILL xFE0A
 KBDR_PTR	.FILL xFE02
 DDR_PTR		.FILL xFE06
-LOW_MASK	.FILL x00FF
-HIGH_MASK	.FILL x1F00
 UNKNOWN_TRAP	.FILL xFFFE
 VECTOR_COUNT	.FILL #256
 FIRST_VECTOR	.FILL x0020
 PUTS_VECTOR	.FILL TRAP_PUTS
+PUTSP_VECTOR	.FILL TRAP_PUTSP
 HALT_VECTOR	.FILL TRAP_HALT
-SAVE_R0		.BLKW 1
-SAVE_R1		.BLKW 1
-SAVE_R2		.BLKW 1
-SAVE_R3		.BLKW 1
-SAVE_R4		.BLKW 1
-SAVE_R5		.BLKW 1
-SAVE_R7		.BLKW 1
-	.BLKW x6F
+IN_R7		.BLKW 1
+
+	.BLKW #206
 	.FILL x01
 	.FILL x21
 	.FILL x41
@@ -232,7 +111,6 @@ SAVE_R7		.BLKW 1
 	.FILL xA1
 	.FILL xC1
 	.FILL xE1
-
 ; Address constants for HALT's LEAs: only the low byte of each address
 ; matters (x20 ' ', x2D '-', x68 'h'), so they are bare labels in the gap.
 	.BLKW x17
@@ -280,7 +158,7 @@ TRAP_HALT
 	STR R7,R7,#-4		; '\n'
 	AND R0,R0,#0
 	STR R0,R0,#-2		; x0000 - 2 = xFFFE: MCR <- 0 halts
-	.BLKW x7A
+	.BLKW #122
 	.FILL x02
 	.FILL x22
 	.FILL x42
@@ -289,7 +167,6 @@ TRAP_HALT
 	.FILL xA2
 	.FILL xC2
 	.FILL xE2
-
 	.BLKW xF8
 	.FILL x03
 	.FILL x23
@@ -515,7 +392,132 @@ TRAP_HALT
 	.FILL xBB
 	.FILL xDB
 	.FILL xFB
-	.BLKW xF8
+
+; PUTSP side blocks for copies 0 and 1 (gap 27).
+	.BLKW #146
+L00_0
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_0
+L001_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_1
+L000_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_C		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_1
+L010_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_1
+HI_0
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_C		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_0
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_0
+L100_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_1
+L101_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_1
+L11_0
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_0
+L110_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_1
+L111_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_1
+L00_1
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_1
+L001_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_2
+L000_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_C		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_2
+L010_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_2
+HI_1
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_C		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_1
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_1
+L100_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_2
+L101_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_2
+L11_1
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_1
+L110_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_2
+L111_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_2
+PUTSP_EXIT_C
+	LDR R5,R3,#-27
+	LDR R4,R3,#-28
+	LDR R2,R3,#-30
+	LDR R1,R3,#-31
+	LDR R0,R3,#-32
+	LDR R7,R3,#-26
+	LDR R3,R3,#-29
+	RET
 	.FILL x1C
 	.FILL x3C
 	.FILL x5C
@@ -524,7 +526,298 @@ TRAP_HALT
 	.FILL xBC
 	.FILL xDC
 	.FILL xFC
-	.BLKW xF8
+
+; PUTSP: copies 2 and 3, entry, main chain, constants, spill slots (gap 28).
+L00_2
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_2
+L001_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_3
+L000_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_A		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_3
+L010_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_3
+HI_2
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_2
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_2
+L100_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_3
+L101_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_3
+L11_2
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_2
+L110_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_3
+L111_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_3
+L00_3
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_3
+L001_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_4
+L000_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_A		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_4
+L010_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_4
+HI_3
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_3
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_3
+L100_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_4
+L101_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_4
+L11_3
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_3
+L110_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_4
+L111_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_4
+
+; PUTSP: print each word's low byte, then its high byte, stopping at the first
+; NUL byte in either position; R0 restored.
+;
+; The high byte h cannot reach a register's low byte by arithmetic (carries
+; only propagate upward), so it is found by a 3-level branch tree on W[15:13]
+; followed by a table lookup on W[12:8]: HIGH_TABLE + (W & x1F00) + W[15:13]
+; holds h, with x0000 for h = 0.
+;
+; The word code is unrolled eight times over LDR offsets 0-7 (WORD_0..WORD_7),
+; so the pointer advances once per eight words (NEXT_BLOCK). Each copy's
+; all-fallthrough path is class 011 (h = x60-x7F, lower-case ASCII): its
+; branches are not taken and its leaf falls into the next copy. The other
+; seven leaves of copy k sit in side blocks and branch to WORD_{k+1}.
+;
+; Registers: R0 = pointer, R7 = word W, R1 = DDR_NL, R2 = x00FF,
+; R3 = x1F00 (also the base the exit stubs restore from), R4 = HIGH_TABLE,
+; R5 = shifted copy of W or the low-byte test. Leaf names give W[15:13].
+TRAP_PUTSP
+	ST R7,SAVE_R7
+	ST R0,SAVE_R0
+	ST R1,SAVE_R1
+	ST R2,SAVE_R2
+	ST R3,SAVE_R3
+	ST R4,SAVE_R4
+	ST R5,SAVE_R5
+	LD R1,PUTSP_DDR_NL
+	LD R2,LOW_MASK
+	LD R3,HIGH_MASK
+	LD R4,TABLE_BASE
+
+WORD_0
+	LDR R7,R0,#0		; sign = W[15]
+	BRn HI_0
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_0
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_0
+L011_0
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_1
+	LDR R7,R0,#1		; sign = W[15]
+	BRn HI_1
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_1
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_1
+L011_1
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_2
+	LDR R7,R0,#2		; sign = W[15]
+	BRn HI_2
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_2
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_2
+L011_2
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_3
+	LDR R7,R0,#3		; sign = W[15]
+	BRn HI_3
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_3
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_3
+L011_3
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_4
+	LDR R7,R0,#4		; sign = W[15]
+	BRn HI_4
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_4
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_4
+L011_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_5
+	LDR R7,R0,#5		; sign = W[15]
+	BRn HI_5
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_5
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_5
+L011_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_6
+	LDR R7,R0,#6		; sign = W[15]
+	BRn HI_6
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_6
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_6
+L011_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+WORD_7
+	LDR R7,R0,#7		; sign = W[15]
+	BRn HI_7
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_A		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRzp L00_7
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L010_7
+L011_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#3
+	STR R7,R1,#-4
+NEXT_BLOCK
+	ADD R0,R0,#8
+	BRnzp WORD_0
+PUTSP_DDR_NL	.FILL xFE0A
+LOW_MASK	.FILL x00FF
+HIGH_MASK	.FILL x1F00
+TABLE_BASE	.FILL HIGH_TABLE
+; Spill slots at x1EE0, within offset6 of R3 = x1F00 for the exit stubs.
+SAVE_R0		.BLKW 1
+SAVE_R1		.BLKW 1
+SAVE_R2		.BLKW 1
+SAVE_R3		.BLKW 1
+SAVE_R4		.BLKW 1
+SAVE_R5		.BLKW 1
+SAVE_R7		.BLKW 1
+PUTSP_EXIT_A
+	LDR R5,R3,#-27
+	LDR R4,R3,#-28
+	LDR R2,R3,#-30
+	LDR R1,R3,#-31
+	LDR R0,R3,#-32
+	LDR R7,R3,#-26
+	LDR R3,R3,#-29
+	RET
+	.BLKW #18
 	.FILL x1D
 	.FILL x3D
 	.FILL x5D
@@ -533,7 +826,246 @@ TRAP_HALT
 	.FILL xBD
 	.FILL xDD
 	.FILL xFD
-	.BLKW xF8
+
+; PUTSP side blocks for copies 4 to 7 (gap 29).
+L00_4
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_4
+L001_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_5
+L000_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_B		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_5
+L010_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_5
+HI_4
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_B		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_4
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_4
+L100_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_5
+L101_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_5
+L11_4
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_4
+L110_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_5
+L111_4
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_5
+L00_5
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_5
+L001_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_6
+L000_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_B		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_6
+L010_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_6
+HI_5
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_B		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_5
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_5
+L100_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_6
+L101_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_6
+L11_5
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_5
+L110_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_6
+L111_5
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_6
+L00_6
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_6
+L001_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp WORD_7
+L000_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_B		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp WORD_7
+L010_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp WORD_7
+HI_6
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_B		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_6
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_6
+L100_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp WORD_7
+L101_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp WORD_7
+L11_6
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_6
+L110_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp WORD_7
+L111_6
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp WORD_7
+L00_7
+	ADD R5,R5,R5		; sign = W[13]
+	BRzp L000_7
+L001_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#1
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+L000_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#0
+	BRz PUTSP_EXIT_B		; high byte NUL: only possible when W[15:13] = 0
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+L010_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#2
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+HI_7
+	AND R5,R7,R2
+	BRz PUTSP_EXIT_B		; low byte NUL
+	STR R7,R1,#-4
+	ADD R5,R7,R7		; sign = W[14]
+	BRn L11_7
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L101_7
+L100_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#4
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+L101_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#5
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+L11_7
+	ADD R5,R5,R5		; sign = W[13]
+	BRn L111_7
+L110_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#6
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+L111_7
+	AND R7,R7,R3
+	ADD R7,R7,R4
+	LDR R7,R7,#7
+	STR R7,R1,#-4
+	BRnzp NEXT_BLOCK
+PUTSP_EXIT_B
+	LDR R5,R3,#-27
+	LDR R4,R3,#-28
+	LDR R2,R3,#-30
+	LDR R1,R3,#-31
+	LDR R0,R3,#-32
+	LDR R7,R3,#-26
+	LDR R3,R3,#-29
+	RET
+	.BLKW #52
 	.FILL x1E
 	.FILL x3E
 	.FILL x5E
@@ -551,7 +1083,6 @@ TRAP_HALT
 	.FILL xBF
 	.FILL xDF
 	.FILL xFF
-
 
 ; PUTS: print the low byte of each word from M[R0] up to the first x0000
 ; word; R0 restored. Two phases (docs/bundled-os-proof.md, "PUTS"):
