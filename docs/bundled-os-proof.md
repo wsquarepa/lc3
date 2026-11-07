@@ -167,13 +167,13 @@ T(L)  = 12M + 2A + 1 + L(2M + A) + A*floor((L + 32) / 64)
 
 ### P1. Per-length lower bound (all fitting designs)
 
-For L ≥ 1:
+For every L ≥ 0:
 
 ```
 LB(L) = 4M + 2A + L(2M + A) + min(L(N + 1), 3M) + [L ≥ 32](2M + A*ceil((L - 31) / 64))
 ```
 
-and LB(0) = 4M + A + B. The terms:
+so LB(0) = 4M + 2A. A design whose empty-string check falls through (`ST R7; LDR R7,R0,#0; BRnp NONEMPTY; LD R7; RET`) meets it. An earlier revision of this section stated LB(0) = 4M + A + B, which no design is bound by. The terms:
 
 - TRAP (M) and RET (A).
 - L + 1 loads of string words (LDR, M) and L + 1 word-dependent instructions (at least A each; P2 step 1).
@@ -187,7 +187,7 @@ LB holds numerically against every design analyzed, at every L up to 5000. It ch
 ### Gap of the shipped design
 
 ```
-gap(0)  = 0
+gap(0)  = 1
 gap(L)  = 3M + 1 - min(L(N + 1), 3M)                                1 ≤ L ≤ 30
 gap(31) = 0
 gap(L)  = 3M + 1 + floor((L - 32) / 64) + [64 does not divide L - 31]  L ≥ 32
@@ -197,10 +197,12 @@ floor((L + 32)/64) = ceil((L - 31)/64) cancels the ADD term exactly. The gap for
 
 | L | 0 | 1 | 2 | 5 | 7 | 8 | 10 | 30 | 31 | 32 | 64 | 95 | 96 | 100 | 200 | 1000 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| N=4 | 0 | 35 | 30 | 15 | 5 | 1 | 1 | 1 | 0 | 41 | 41 | 40 | 42 | 42 | 43 | 56 |
-| N=1 | 0 | 20 | 18 | 12 | 8 | 6 | 2 | 1 | 0 | 23 | 23 | 22 | 24 | 24 | 25 | 38 |
+| N=4 | 1 | 35 | 30 | 15 | 5 | 1 | 1 | 1 | 0 | 41 | 41 | 40 | 42 | 42 | 43 | 56 |
+| N=1 | 1 | 20 | 18 | 12 | 8 | 6 | 2 | 1 | 0 | 23 | 23 | 22 | 24 | 24 | 25 | 38 |
 
 Worst case: **42 over L ≤ 100 at N=4** (first reached at L = 96; 24 at N=1), and 56 (38) over L ≤ 1000. Over every possible length (L ≤ 65535) the back edges accumulate to 1064 (1046).
+
+The empty string's gap of 1 comes from the tie ruling, which makes the empty string pay the taken entry branch. The ruling still holds under this objective. The alternative (`BRnp` to the non-empty path) would give gap(0) = 0 but add the taken cycle to every L ≥ 1, raising the worst case to 43 (25 at N=1) and every short-length gap by one.
 
 ### P2. Slope
 
@@ -247,7 +249,7 @@ With the literal objective over all L ≤ 65535, the maximal unroll's slower bac
 
 **Proven:**
 
-- LB(L) holds for every fitting design (P1).
+- LB(L) holds for every fitting design at every L ≥ 0 (P1; corrected at L = 0, where it is 4M + 2A).
 - The shipped design's exact gap at every L is the closed form above.
 - Its loop slope is within 1/64 of the universal floor and optimal among single-branch loops (P2).
 - Within the classes in P3, no design has a smaller worst-case gap over L ≤ 100 or L ≤ 1000, at either latency. The exceptions are the idealized H(0, 31), which this layout cannot realize, and the N=1 tie noted in P3.
