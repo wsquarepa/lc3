@@ -283,8 +283,8 @@ fn puts_cost(len: u64, c: Costs) -> u64 {
         position => position,
     };
     let (hops, via_stub) = puts_exit_route(position);
-    15 * c.m
-        + 2 * c.a
+    14 * c.m
+        + 3 * c.a
         + len * (2 * c.m + c.a)
         + c.a * ((len + 32) / 64)
         + c.a * ((len - 1) / PUTS_UNROLLED)
@@ -318,7 +318,7 @@ fn puts_prints_low_bytes_until_a_zero_word_at_about_34_cycles_per_character() {
     let c = Costs::at(4);
     assert_eq!(
         [0, 1, 64, 1216, 1217].map(|len| puts_cost(len, c)),
-        [69, 246, 2396, 41729, 41750]
+        [69, 241, 2391, 41724, 41745]
     );
 }
 
@@ -346,7 +346,7 @@ fn putsp_word_cost(class: u16, c: Costs) -> u64 {
 
 /// Prologue and register restore of PUTSP, excluding the words.
 fn putsp_fixed_cost(c: Costs) -> u64 {
-    19 * c.m + c.a + c.b
+    18 * c.m + 2 * c.a + c.b
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn putsp_costs_per_word_class_as_a_function_of_length() {
         }
     }
     let c = Costs::at(4);
-    assert_eq!(putsp_fixed_cost(c), 264);
+    assert_eq!(putsp_fixed_cost(c), 259);
     assert_eq!(
         (0..8)
             .map(|class| putsp_word_cost(class, c))

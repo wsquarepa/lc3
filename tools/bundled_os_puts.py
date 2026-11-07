@@ -31,7 +31,6 @@ PREFIX = (
     "PUTS_R7\t\t.BLKW 1",
     "PUTS_BASE\t.FILL xFE0A",
     "PUTS_STRIDE\t.FILL #64",
-    "PUTS_BODY_PTR\t.FILL PUTS_BODY",
     "PUTS_EXIT",
     "\tLD R3,PUTS_R3",
     "\tLD R2,PUTS_R2",
@@ -50,7 +49,7 @@ PREFIX = (
     "\tST R3,PUTS_R3",
     "\tLD R1,PUTS_BASE",
     "\tLD R2,PUTS_STRIDE",
-    "\tLD R3,PUTS_BODY_PTR",
+    "\tLEA R3,PUTS_BODY",
 )
 EXIT_OFFSET = -16
 """Address of PUTS_EXIT relative to PUTS_BODY: 6 epilogue + 10 prologue words."""
