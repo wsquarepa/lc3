@@ -1,9 +1,10 @@
-use crate::source::{Diagnostic, Severity};
+use crate::source::{Diagnostic, Image, Severity};
 
 /// Accepts UTF-8 lines of exactly 16 binary digits with spaces, tabs and `;`
-/// comments. Returns the origin and image words, or errors for every malformed
-/// line or a missing origin. Blank lines and CRLF endings are accepted.
-pub(crate) fn bin(bytes: &[u8]) -> Result<(u16, Vec<u16>), Vec<Diagnostic>> {
+/// comments. Returns the image whose first word is the origin, or errors for
+/// every malformed line or a missing origin. Blank lines and CRLF endings are
+/// accepted.
+pub(crate) fn bin(bytes: &[u8]) -> Result<Image, Vec<Diagnostic>> {
     words(
         bytes,
         binary_word,
@@ -12,10 +13,10 @@ pub(crate) fn bin(bytes: &[u8]) -> Result<(u16, Vec<u16>), Vec<Diagnostic>> {
 }
 
 /// Accepts UTF-8 lines of one to four hex digits with an optional `x`/`X`,
-/// surrounding spaces or tabs and `;` comments. Returns the origin and image
-/// words, or errors for every malformed line or a missing origin. Blank lines
-/// and CRLF endings are accepted.
-pub(crate) fn hex(bytes: &[u8]) -> Result<(u16, Vec<u16>), Vec<Diagnostic>> {
+/// surrounding spaces or tabs and `;` comments. Returns the image whose first
+/// word is the origin, or errors for every malformed line or a missing origin.
+/// Blank lines and CRLF endings are accepted.
+pub(crate) fn hex(bytes: &[u8]) -> Result<Image, Vec<Diagnostic>> {
     words(
         bytes,
         hex_word,
@@ -27,7 +28,7 @@ fn words(
     bytes: &[u8],
     parse_word: fn(&str) -> Option<u16>,
     expected: &str,
-) -> Result<(u16, Vec<u16>), Vec<Diagnostic>> {
+) -> Result<Image, Vec<Diagnostic>> {
     let mut words = Vec::new();
     let mut diagnostics = Vec::new();
     for (index, raw) in bytes.split(|&byte| byte == b'\n').enumerate() {
@@ -81,7 +82,7 @@ fn words(
             message: "source contains no words; supply an origin word".to_owned(),
         }]
     })?;
-    Ok((origin, words.collect()))
+    Ok(Image::new(origin, words.collect()))
 }
 
 fn binary_word(text: &str) -> Option<u16> {

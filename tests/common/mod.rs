@@ -1,12 +1,8 @@
-use lc3::{Case, Format, Halted, Image, Outcome, Pokes, Trigger, load, prepare, run};
+use lc3::{Case, Halted, Image, Outcome, Pokes, Trigger, prepare, run};
 use std::num::NonZeroU32;
 
 pub fn image(origin: u16, words: &[u16]) -> Image {
-    let bytes: Vec<u8> = std::iter::once(origin)
-        .chain(words.iter().copied())
-        .flat_map(u16::to_be_bytes)
-        .collect();
-    load(Format::Obj, &bytes).unwrap().image
+    Image::new(origin, words.to_vec())
 }
 
 pub fn os() -> Image {

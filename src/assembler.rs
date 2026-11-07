@@ -1,6 +1,6 @@
 use std::collections::{HashMap, hash_map::Entry};
 
-use crate::{Diagnostic, Format, Loaded, Severity, load};
+use crate::{Diagnostic, Image, Loaded, Severity};
 
 struct ParsedLine<'a> {
     labels: Vec<&'a str>,
@@ -71,13 +71,10 @@ fn assemble_source(source: &str) -> Result<Loaded, Vec<Diagnostic>> {
     let origin = layout
         .origin
         .ok_or_else(|| vec![diagnostic(1, source, "missing .ORIG")])?;
-    let bytes: Vec<_> = std::iter::once(origin)
-        .chain(words)
-        .flat_map(u16::to_be_bytes)
-        .collect();
-    let mut loaded = load(Format::Obj, &bytes)?;
-    loaded.warnings = layout.warnings;
-    Ok(loaded)
+    Ok(Loaded {
+        image: Image::new(origin, words),
+        warnings: layout.warnings,
+    })
 }
 
 fn layout(source: &str) -> Layout<'_> {
@@ -185,14 +182,14 @@ fn layout(source: &str) -> Layout<'_> {
                 "instruction or directive before .ORIG",
             ));
         }
-        let emission = match emission(parsed.opcode, parsed.operands, text, source_tail) {
-            Ok(emission) => emission,
+        let parsed_emission = match emission(parsed.opcode, parsed.operands, text, source_tail) {
+            Ok(parsed_emission) => parsed_emission,
             Err(reason) => {
                 errors.push(diagnostic(line, text, &reason));
                 continue;
             }
         };
-        let word_count = match &emission {
+        let word_count = match &parsed_emission {
             Emission::Data(words) => words.len(),
             Emission::Instruction { .. } => 1,
         };
@@ -200,7 +197,7 @@ fn layout(source: &str) -> Layout<'_> {
             line,
             text,
             address,
-            emission,
+            emission: parsed_emission,
         });
         address = address.wrapping_add(word_count as u16);
     }

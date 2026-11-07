@@ -6,6 +6,13 @@ pub struct Image {
 }
 
 impl Image {
+    /// Returns an image that places `words` in memory from `origin` upward.
+    /// Any word list is accepted, including an empty one; addresses past xFFFF
+    /// wrap to x0000 when the image is loaded by `prepare`.
+    pub fn new(origin: u16, words: Vec<u16>) -> Self {
+        Self { origin, words }
+    }
+
     /// Returns the address at which the first word is loaded.
     pub fn origin(&self) -> u16 {
         self.origin
@@ -79,14 +86,15 @@ pub fn load(format: Format, bytes: &[u8]) -> Result<Loaded, Vec<Diagnostic>> {
     match format {
         Format::Obj => load_obj(bytes),
         Format::Asm => crate::assembler::assemble(bytes),
-        Format::Bin => crate::convert::bin(bytes).map(|(origin, words)| Loaded {
-            image: Image { origin, words },
-            warnings: Vec::new(),
-        }),
-        Format::Hex => crate::convert::hex(bytes).map(|(origin, words)| Loaded {
-            image: Image { origin, words },
-            warnings: Vec::new(),
-        }),
+        Format::Bin => crate::convert::bin(bytes).map(without_warnings),
+        Format::Hex => crate::convert::hex(bytes).map(without_warnings),
+    }
+}
+
+fn without_warnings(image: Image) -> Loaded {
+    Loaded {
+        image,
+        warnings: Vec::new(),
     }
 }
 
@@ -101,17 +109,14 @@ fn load_obj(bytes: &[u8]) -> Result<Loaded, Vec<Diagnostic>> {
             ),
         }]);
     }
-    Ok(Loaded {
-        image: Image {
-            origin: u16::from_be_bytes([bytes[0], bytes[1]]),
-            words: bytes[2..]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .copied()
-                .map(u16::from_be_bytes)
-                .collect(),
-        },
-        warnings: Vec::new(),
-    })
+    Ok(without_warnings(Image::new(
+        u16::from_be_bytes([bytes[0], bytes[1]]),
+        bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .copied()
+            .map(u16::from_be_bytes)
+            .collect(),
+    )))
 }

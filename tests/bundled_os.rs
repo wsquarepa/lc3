@@ -49,14 +49,6 @@ impl Costs {
     }
 }
 
-fn image(origin: u16, words: &[u16]) -> Image {
-    let bytes: Vec<u8> = std::iter::once(origin)
-        .chain(words.iter().copied())
-        .flat_map(u16::to_be_bytes)
-        .collect();
-    load(Format::Obj, &bytes).unwrap().image
-}
-
 fn bundled() -> Image {
     lc3::bundled_os().clone()
 }
@@ -97,7 +89,12 @@ fn program(r0_setup: u16, trap: u16, data: &[u16]) -> Vec<u16> {
 }
 
 fn halted(os: &Image, words: &[u16], input: &[u8], n: u32) -> Halted {
-    let prepared = prepare(os, &[image(0x3000, words)], NonZeroU32::new(n).unwrap()).unwrap();
+    let prepared = prepare(
+        os,
+        &[Image::new(0x3000, words.to_vec())],
+        NonZeroU32::new(n).unwrap(),
+    )
+    .unwrap();
     match run(
         &prepared,
         &Case {

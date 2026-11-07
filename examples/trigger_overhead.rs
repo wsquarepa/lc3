@@ -1,7 +1,7 @@
 //! Run with `cargo run --release --example trigger_overhead`.
 //! Measures complete runs of a fixed nested loop, including snapshot cloning.
 
-use lc3::{Case, Format, Image, Outcome, Pokes, Prepared, Trigger, load, prepare, run};
+use lc3::{Case, Image, Outcome, Pokes, Prepared, Trigger, prepare, run};
 use std::hint::black_box;
 use std::io;
 use std::num::NonZeroU32;
@@ -13,17 +13,6 @@ const INSTRUCTIONS: u64 = 2 + OUTER_ITERATIONS as u64 * (2 * INNER_ITERATIONS as
 const EXPECTED_CYCLES: u64 = 15 + OUTER_ITERATIONS as u64 * (11 * INNER_ITERATIONS as u64 + 17);
 const SAMPLES: usize = 9;
 const RUNS_PER_SAMPLE: u32 = 4;
-
-/// Loads in-memory words as an object image; reports loader diagnostics on failure.
-fn image(origin: u16, words: &[u16]) -> io::Result<Image> {
-    let bytes: Vec<u8> = std::iter::once(origin)
-        .chain(words.iter().copied())
-        .flat_map(u16::to_be_bytes)
-        .collect();
-    load(Format::Obj, &bytes)
-        .map(|loaded| loaded.image)
-        .map_err(|diagnostics| io::Error::other(format!("image at {origin:#06x}: {diagnostics:?}")))
-}
 
 /// Runs the fixed loop; reports a failed outcome or unexpected cycle count.
 fn checked_run(prepared: &Prepared, case: &Case) -> io::Result<()> {
@@ -49,10 +38,10 @@ fn measure(prepared: &Prepared, case: &Case) -> io::Result<Duration> {
 /// Prints median and range in ns per instruction for interleaved samples.
 /// Returns errors for invalid images, failed preparation, or unexpected loop outcomes.
 fn main() -> io::Result<()> {
-    let os = image(0x0200, &[0xb400, 0xfffe])?;
-    let program = image(
+    let os = Image::new(0x0200, vec![0xb400, 0xfffe]);
+    let program = Image::new(
         0x3000,
-        &[
+        vec![
             0x2208,
             0x2006,
             0x103f,
@@ -65,7 +54,7 @@ fn main() -> io::Result<()> {
             OUTER_ITERATIONS,
             0xfffe,
         ],
-    )?;
+    );
     let prepared = prepare(&os, &[program], NonZeroU32::MIN)
         .map_err(|error| io::Error::other(format!("preparation failed: {error:?}")))?;
     let cases = [

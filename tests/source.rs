@@ -1,4 +1,13 @@
-use lc3::{Format, Severity, load};
+use lc3::{Format, Image, Severity, load};
+
+#[test]
+fn new_image_equals_the_same_image_loaded_from_obj() {
+    let image = Image::new(0x3000, vec![0x1234, 0xabcd]);
+    assert_eq!(image.origin(), 0x3000);
+    assert_eq!(image.words(), &[0x1234, 0xabcd]);
+    let loaded = load(Format::Obj, &[0x30, 0x00, 0x12, 0x34, 0xab, 0xcd]).unwrap();
+    assert_eq!(loaded.image, image);
+}
 
 #[test]
 fn obj_loads_big_endian_origin_and_program_words() {
