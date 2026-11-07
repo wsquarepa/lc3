@@ -105,3 +105,56 @@ fn asm_rejects_ambiguous_structure_and_malformed_operands() {
         );
     }
 }
+
+#[test]
+fn asm_rejects_strings_that_lc3as_extends_across_later_lines() {
+    let sources = [
+        ".ORIG x3000\n.STRINGZ \"a\\\\\"\nHALT\n; trailing quote \"\n.END\n",
+        ".ORIG x3000\n.STRINGZ \"a\\\\\"\nHALT ; done\"\n.END\n",
+        ".ORIG x3000\r\n.STRINGZ \"a\\\\\"\r\nHALT\r\n; trailing quote \"\r\n.END\r\n",
+        ".ORIG x3000\n.STRINGZ \"a\\\\\"\nHidden HALT\n; trailing quote \"\n.END\n",
+        ".ORIG x3000\n.STRINGZ \"a\\\\\"\nHALT ; escaped \\\"\n; trailing quote \"\n.END\n",
+        ".ORIG x3000\n.STRINGZ \"a\\\\\"\nHALT ; escaped \\\"\n; blocked \" extra\n.END\n",
+        ".ORIG x3000\n.STRINGZ \"a\\\\\"\nHALT ; done\" \t ; suffix\n.END\n",
+    ];
+    for source in sources {
+        let diagnostics = load(Format::Asm, source.as_bytes()).unwrap_err();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, lc3::Severity::Error);
+        assert_eq!(diagnostics[0].line, Some(2), "{source:?}");
+        assert!(
+            diagnostics[0].message.contains(".STRINGZ"),
+            "{diagnostics:?}"
+        );
+        assert!(
+            diagnostics[0].message.contains("swallow"),
+            "{diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn asm_rejects_whitespace_and_stray_operand_forms_that_lc3as_rejects() {
+    let statements = [
+        "ADD R0,\u{a0}R1,#1",
+        "\u{b}HALT",
+        "\u{c}HALT",
+        "LOOP R0",
+        "LOOP x10",
+        "  x10",
+        "\tR0",
+        "ADD R0,R1,\u{b}#1",
+        "HALT\u{c}",
+    ];
+    for statement in statements {
+        let source = format!(".ORIG x3000\n{statement}\n.END\n");
+        let diagnostics = load(Format::Asm, source.as_bytes()).unwrap_err();
+        assert_eq!(diagnostics.len(), 1, "{statement:?}");
+        assert_eq!(diagnostics[0].severity, lc3::Severity::Error);
+        assert_eq!(diagnostics[0].line, Some(2), "{statement:?}");
+        assert!(
+            diagnostics[0].message.contains(&format!("{statement:?}")),
+            "{diagnostics:?}"
+        );
+    }
+}

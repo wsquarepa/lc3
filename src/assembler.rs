@@ -72,7 +72,12 @@ fn layout(source: &str) -> Result<Layout<'_>, Diagnostic> {
     let mut ended = false;
     let mut last_line = 1;
     let mut last_text = "";
-    for (index, text) in source.lines().enumerate() {
+    let mut source_offset = 0;
+    for (index, raw_line) in source.split_inclusive('\n').enumerate() {
+        let source_tail = &source[source_offset..];
+        source_offset += raw_line.len();
+        let text = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let text = text.strip_suffix('\r').unwrap_or(text);
         let line = u32::try_from(index + 1)
             .map_err(|_| diagnostic(u32::MAX, text, "source exceeds the line number limit"))?;
         last_line = line;
@@ -118,9 +123,19 @@ fn layout(source: &str) -> Result<Layout<'_>, Diagnostic> {
                         .map_err(|reason| diagnostic(line, text, &reason))?
                 )
             ]),
-            ".STRINGZ" => Emission::Data(
-                string_words(parsed.operands).map_err(|reason| diagnostic(line, text, &reason))?,
-            ),
+            ".STRINGZ" => {
+                let words = string_words(parsed.operands)
+                    .map_err(|reason| diagnostic(line, text, &reason))?;
+                let code_end = before_comment(text).trim_end_matches([' ', '\t']).len();
+                if string_swallows_lines(parsed.operands, &source_tail[code_end..]) {
+                    return Err(diagnostic(
+                        line,
+                        text,
+                        ".STRINGZ would swallow later lines in lc3as; remove the ambiguous closing backslash or later quote",
+                    ));
+                }
+                Emission::Data(words)
+            }
             _ => Emission::Instruction {
                 opcode: parsed.opcode,
                 operands: parsed.operands,
@@ -157,9 +172,16 @@ fn layout(source: &str) -> Result<Layout<'_>, Diagnostic> {
 }
 
 fn parse_line(text: &str) -> Result<ParsedLine<'_>, String> {
-    let mut remaining = before_comment(text).trim();
+    let mut remaining = before_comment(text)
+        .trim_matches('\r')
+        .trim_end_matches([' ', '\t']);
     let mut labels = Vec::new();
     while !remaining.is_empty() {
+        let after_space = remaining.trim_start_matches([' ', '\t']);
+        if after_space.len() < remaining.len() && is_stray_operand_format(after_space) {
+            return Err(format!("operands without an opcode: {after_space:?}"));
+        }
+        remaining = after_space;
         let length = remaining
             .bytes()
             .enumerate()
@@ -168,12 +190,12 @@ fn parse_line(text: &str) -> Result<ParsedLine<'_>, String> {
             })
             .count();
         let token = &remaining[..length];
-        let tail = remaining[length..].trim_start_matches([' ', '\t']);
+        let tail = &remaining[length..];
         if is_label(token)
-            && let Some(tail) = tail.strip_prefix(':')
+            && let Some(tail) = tail.trim_start_matches([' ', '\t']).strip_prefix(':')
         {
             labels.push(token);
-            remaining = tail.trim_start_matches([' ', '\t']);
+            remaining = tail;
             continue;
         }
         let opcode = token.to_ascii_uppercase();
@@ -184,7 +206,7 @@ fn parse_line(text: &str) -> Result<ParsedLine<'_>, String> {
             return Ok(ParsedLine {
                 labels,
                 opcode,
-                operands: tail.trim_end(),
+                operands: tail.trim_matches([' ', '\t']),
             });
         }
         if !is_label(token) {
@@ -198,6 +220,30 @@ fn parse_line(text: &str) -> Result<ParsedLine<'_>, String> {
         opcode: String::new(),
         operands: "",
     })
+}
+
+fn is_stray_operand_format(text: &str) -> bool {
+    // INITIAL's operand rules outmatch leading SPACE in lc3.f.
+    // O_L is absent there, so ordinary label-only remainders are valid.
+    let operands: Vec<_> = text
+        .split(',')
+        .map(|operand| operand.trim_matches([' ', '\t']))
+        .collect();
+    match operands.as_slice() {
+        [operand] => {
+            is_register(operand) || literal_parts(operand).is_some() || operand.starts_with('"')
+        }
+        [first, second] => {
+            is_register(first)
+                && (is_register(second) || literal_parts(second).is_some() || is_label(second))
+        }
+        [first, second, third] => {
+            is_register(first)
+                && is_register(second)
+                && (is_register(third) || literal_parts(third).is_some())
+        }
+        _ => false,
+    }
 }
 
 fn before_comment(text: &str) -> &str {
@@ -296,6 +342,41 @@ fn string_words(text: &str) -> Result<Vec<u16>, String> {
     Err(format!("unterminated string or raw newline in {text:?}"))
 }
 
+fn string_swallows_lines(string: &str, suffix: &str) -> bool {
+    if !string
+        .strip_suffix('"')
+        .is_some_and(|content| content.ends_with('\\'))
+    {
+        return false;
+    }
+    let Some(newline) = suffix.find('\n') else {
+        return false;
+    };
+    // lc3.f's STRING can treat any backslash-preceded quote as interior,
+    // regardless of backslash parity. O_S wins the longest match across lines
+    // when a later quote ends a line, but generation stops at the original quote.
+    for (index, _) in suffix.match_indices('"') {
+        if index > newline && string_quote_ends_line(&suffix[index + 1..]) {
+            return true;
+        }
+        if !suffix[..index].ends_with('\\') {
+            return false;
+        }
+    }
+    false
+}
+
+fn string_quote_ends_line(suffix: &str) -> bool {
+    let mut suffix = suffix.trim_start_matches([' ', '\t']);
+    if suffix.starts_with(';') {
+        let Some(end) = suffix.find(['\r', '\n']) else {
+            return false;
+        };
+        suffix = &suffix[end..];
+    }
+    suffix.starts_with('\n') || suffix.starts_with("\r\n")
+}
+
 fn label_address(text: &str, labels: &HashMap<String, u16>) -> Result<u16, String> {
     if !is_label(text) || is_register(text) {
         return Err(format!("expected a label or literal, got {text:?}"));
@@ -336,7 +417,10 @@ fn encode_instruction(
     let operands: Vec<_> = if operands.is_empty() {
         Vec::new()
     } else {
-        operands.split(',').map(str::trim).collect()
+        operands
+            .split(',')
+            .map(|operand| operand.trim_matches([' ', '\t']))
+            .collect()
     };
     if let Some(conditions) = branch_conditions(opcode) {
         return match operands.as_slice() {
