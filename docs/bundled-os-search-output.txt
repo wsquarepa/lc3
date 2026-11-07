@@ -1,0 +1,96 @@
+N=1 GETC: minimum 21, bundled OS 21
+    'TRAP'
+    'R0 <- KBDR'
+    'RET'
+N=1 OUT: minimum 21, bundled OS 21
+    'TRAP'
+    'DDR <- R0'
+    'RET'
+N=1 IN: minimum 54, bundled OS 54
+    'TRAP'
+    'spill R7 (RET)'
+    "R7 <- ('base', '\\n')"
+    'R0 <- KBDR'
+    'DDR <- R0'
+    'DDR <- R7'
+    'R7 <- reload RET'
+    'RET'
+N=1 HALT: minimum 188, bundled OS 188
+    'TRAP'
+    "R0 <- ('ch', '\\n')"
+    "R7 <- ('base', ' ')"
+    'DDR <- R0'
+    "R0 <- ('ch', '-')"
+    'DDR <- R0'
+    'DDR <- R0'
+    'DDR <- R0'
+    "R0 <- ('ch', 'h')"
+    'DDR <- R7'
+    'DDR <- R0'
+    "R0 <- ('ch', 'a')"
+    'DDR <- R0'
+    "R0 <- ('ch', 'l')"
+    'DDR <- R0'
+    "R0 <- ('ch', 't')"
+    'DDR <- R0'
+    "R0 <- ('ch', 'e')"
+    'DDR <- R0'
+    "R0 <- ('ch', 'd')"
+    'DDR <- R0'
+    "R0 <- ('ch', '-')"
+    'DDR <- R7'
+    "R7 <- ('base', '\\n')"
+    'DDR <- R0'
+    'DDR <- R0'
+    'DDR <- R0'
+    'R0 <- Z'
+    'DDR <- R7'
+    'HALT'
+N=4 GETC: minimum 39, bundled OS 39
+    'TRAP'
+    'R0 <- KBDR'
+    'RET'
+N=4 OUT: minimum 39, bundled OS 39
+    'TRAP'
+    'DDR <- R0'
+    'RET'
+N=4 IN: minimum 99, bundled OS 99
+    'TRAP'
+    'spill R7 (RET)'
+    "R7 <- ('base', '\\n')"
+    'R0 <- KBDR'
+    'DDR <- R0'
+    'DDR <- R7'
+    'R7 <- reload RET'
+    'RET'
+N=4 HALT: minimum 335, bundled OS 335
+    'TRAP'
+    "R0 <- ('ch', '\\n')"
+    "R7 <- ('base', ' ')"
+    'DDR <- R0'
+    "R0 <- ('ch', '-')"
+    'DDR <- R0'
+    'DDR <- R0'
+    'DDR <- R0'
+    "R0 <- ('ch', 'h')"
+    'DDR <- R7'
+    'DDR <- R0'
+    "R0 <- ('ch', 'a')"
+    'DDR <- R0'
+    "R0 <- ('ch', 'l')"
+    'DDR <- R0'
+    "R0 <- ('ch', 't')"
+    'DDR <- R0'
+    "R0 <- ('ch', 'e')"
+    'DDR <- R0'
+    "R0 <- ('ch', 'd')"
+    'DDR <- R0'
+    "R0 <- ('ch', '-')"
+    'DDR <- R7'
+    "R7 <- ('base', '\\n')"
+    'DDR <- R0'
+    'DDR <- R0'
+    'DDR <- R0'
+    'R0 <- Z'
+    'DDR <- R7'
+    'HALT'

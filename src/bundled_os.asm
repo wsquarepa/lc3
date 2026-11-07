@@ -245,10 +245,10 @@ CHAR_H		.BLKW 1
 ; HALT: print "\n--- halted ---\n", then halt with R0 = x0000 (as the
 ; reference OS leaves it) and R1-R6 untouched. R7 = DDR_NL serves as the device
 ; base and as both linefeeds; R0 carries every other character. LEA targets
-; are the CHAR_* addresses below, chosen for their low bytes; the other
-; characters are ADD steps from the previous one. HALT sits in the second
-; table gap with those addresses, beyond reach of DDR_NL, so it keeps its own
-; copy of it.
+; are the CHAR_* labels just above, chosen for their low bytes; the other
+; characters are ADD steps from the previous one. HALT sits with those labels
+; in the second table gap, beyond reach of DDR_NL, so it keeps its own copy of
+; it.
 HALT_BASE	.FILL xFE0A
 TRAP_HALT
 	LD R7,HALT_BASE
