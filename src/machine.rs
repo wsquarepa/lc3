@@ -1,11 +1,12 @@
-use crate::Image;
 use crate::core::{MEMORY_WORDS, State};
+use crate::{Image, bundled_os};
 use std::num::NonZeroU32;
 
 const BOOT_CYCLE_CAP: u64 = 10_000_000;
 const MAX_IMAGES: usize = u16::MAX as usize - 1;
 
 /// An immutable boot snapshot with images loaded, ready for independent runs.
+/// The snapshot records whether the OS origin and words match the bundled OS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     snapshot: State,
@@ -170,6 +171,12 @@ pub enum Failure {
         pc: u16,
     },
     CycleCapReached,
+    /// A TRAP under the bundled OS read xFFFE from its vector-table entry.
+    /// The failing TRAP's cost is checked against the cap but is not counted.
+    UnknownTrap {
+        /// Low byte of the executing TRAP instruction.
+        vector: u8,
+    },
     IllegalInstruction {
         pc: u16,
         word: u16,
@@ -241,7 +248,7 @@ pub fn prepare(
         images: images.iter().map(Image::word_count).collect(),
         os: os.word_count(),
     };
-    let (boot_snapshot, _, _) = State::zeroed()
+    let (boot_snapshot, _, _) = State::zeroed(os == bundled_os())
         .load_image(os)
         .start_at(0x0200)
         .execute::<false>(
@@ -280,8 +287,8 @@ fn load_ownership(
 }
 
 /// Runs `case` on a private copy of `prepared`, returning final state on halt or
-/// `Outcome::Failed` with `CycleCapReached`, `IllegalInstruction`, or
-/// `InputExhausted`. KBDR reads consume `case.input` bytes, including instruction
+/// `Outcome::Failed` with `CycleCapReached`, `IllegalInstruction`, `InputExhausted`,
+/// or `UnknownTrap`. KBDR reads consume `case.input` bytes, including instruction
 /// fetches from KBDR; an exhausted read reports the fetching/reading instruction's
 /// unincremented PC. Counts include the halting instruction and exclude boot.
 /// Each successful KBDR read stores its zero-extended byte in backing memory.
@@ -296,6 +303,9 @@ fn load_ownership(
 /// Triggers fire once before fetch and cycle-cap checks, including at the origin.
 /// Ownership and source word counts remain fixed across pokes and program stores.
 /// Runs without triggers omit trigger checks from the shared execution loop.
+/// Only an OS matching the bundled image's origin and words enables UnknownTrap:
+/// after checking the TRAP's cost against the cap, a vector-table entry of xFFFE
+/// fails without loading PC or counting that TRAP's cycles.
 pub fn run(prepared: &Prepared, case: &Case) -> Outcome {
     let state = prepared.snapshot.clone().apply_pokes(&case.pokes);
     let image_count = prepared.word_counts.images.len();

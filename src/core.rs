@@ -77,10 +77,11 @@ pub(crate) struct State {
     halted: bool,
     halt_started: bool,
     input_position: usize,
+    bundled_os: bool,
 }
 
 impl State {
-    pub(crate) fn zeroed() -> Self {
+    pub(crate) fn zeroed(bundled_os: bool) -> Self {
         let mut memory = vec![0; MEMORY_WORDS].into_boxed_slice();
         memory[usize::from(MCR)] = MCR_RUNNING;
         Self {
@@ -95,6 +96,7 @@ impl State {
             halted: false,
             halt_started: false,
             input_position: 0,
+            bundled_os,
         }
     }
 
@@ -350,6 +352,9 @@ impl State {
                 self.halt_started |= word == 0xf025;
                 self.registers.r[7] = next_pc;
                 let (state, address) = self.read(word & 0xff, input, pc)?;
+                if state.bundled_os && address == MCR {
+                    return Err(Failure::UnknownTrap { vector: word as u8 });
+                }
                 self = state;
                 next_pc = address;
             }

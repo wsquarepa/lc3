@@ -59,7 +59,8 @@ fn image(origin: u16, words: &[u16]) -> Image {
 }
 
 fn bundled() -> Image {
-    load(Format::Obj, BUNDLED_OS_OBJ).unwrap().image
+    let _ = BUNDLED_OS_OBJ;
+    lc3::bundled_os().clone()
 }
 
 /// Returns the reference OS, or `None` when the git-excluded reference folder is
