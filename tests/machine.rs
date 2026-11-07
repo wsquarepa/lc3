@@ -5,7 +5,7 @@ use lc3::{
     BootFailure, Case, Failure, Format, IllegalKind, Outcome, PrepareError, load, prepare, run,
 };
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::num::NonZeroU32;
 use std::path::Path;
 
@@ -271,7 +271,12 @@ fn reference_os_start_state_puts_getc_and_out_match_measured_behavior() {
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            eprintln!("skipping: reference OS not found at {}", path.display());
+            writeln!(
+                std::io::stderr(),
+                "skipping: reference OS not found at {}",
+                path.display()
+            )
+            .expect("failed to write the reference OS skip message to stderr");
             return;
         }
         Err(error) => panic!("cannot read reference OS at {}: {error}", path.display()),
