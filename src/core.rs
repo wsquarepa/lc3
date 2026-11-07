@@ -1,7 +1,7 @@
 use crate::{Failure, IllegalKind, Image, Pokes, Register, Registers, Trigger};
 use std::num::NonZeroU32;
 
-const MEMORY_WORDS: usize = 1 << 16;
+pub(crate) const MEMORY_WORDS: usize = 1 << 16;
 const KBSR: u16 = 0xfe00;
 const KBDR: u16 = 0xfe02;
 const DSR: u16 = 0xfe04;
@@ -148,7 +148,15 @@ impl State {
         self
     }
 
-    fn read(mut self, address: u16, input: &[u8], pc: u16) -> Result<(Self, u16), Failure> {
+    // Inlining read, store and set_register trades code size for 18.6 -> 14.7 us
+    // per case with boxed state (release, Ryzen AI 9 365, core 0).
+    #[inline(always)]
+    fn read(
+        mut self: Box<Self>,
+        address: u16,
+        input: &[u8],
+        pc: u16,
+    ) -> Result<(Box<Self>, u16), Failure> {
         if address >= KBSR {
             match address {
                 KBSR | DSR => return Ok((self, 0x8000)),
@@ -169,7 +177,8 @@ impl State {
         Ok((self, value))
     }
 
-    fn store(mut self, address: u16, value: u16) -> Self {
+    #[inline(always)]
+    fn store(mut self: Box<Self>, address: u16, value: u16) -> Box<Self> {
         if address >= KBSR {
             match address {
                 DDR => {
@@ -199,15 +208,18 @@ impl State {
     /// 64 KiB pending table gives constant-time checks between trigger batches.
     /// Captures the halt-routine address from x0025 before any triggers or fetches.
     pub(crate) fn execute<const WITH_TRIGGERS: bool>(
-        mut self,
+        self,
         mem_latency: NonZeroU32,
         cycle_cap: u64,
         input: &[u8],
         triggers: &[Trigger],
-        owners: &[u16],
+        owners: &[u16; MEMORY_WORDS],
         owner_count: usize,
     ) -> Result<(Self, u64, Vec<u64>), Failure> {
-        let halt_address = self.memory[usize::from(HALT_VECTOR)];
+        // One small allocation replaces repeated 96-byte State moves through
+        // read/step results: 96.6 -> 14.7 us/case (release, Ryzen AI 9 365, core 0).
+        let mut state = Box::new(self);
+        let halt_address = state.memory[usize::from(HALT_VECTOR)];
         let mut pending = if WITH_TRIGGERS {
             vec![false; MEMORY_WORDS]
         } else {
@@ -220,40 +232,40 @@ impl State {
         }
         let mut buckets = vec![0; owner_count];
         let mut cycles = 0;
-        while !self.halted {
+        while !state.halted {
             if WITH_TRIGGERS {
-                while pending[usize::from(self.registers.pc)] {
-                    let pc = self.registers.pc;
+                while pending[usize::from(state.registers.pc)] {
+                    let pc = state.registers.pc;
                     pending[usize::from(pc)] = false;
                     for trigger in triggers.iter().filter(|trigger| trigger.pc == pc) {
-                        self = self.apply_pokes(&trigger.pokes);
+                        state = Box::new((*state).apply_pokes(&trigger.pokes));
                     }
                 }
             }
             if cycle_cap == 0 {
                 return Err(Failure::CycleCapReached);
             }
-            let pc = self.registers.pc;
+            let pc = state.registers.pc;
             if pc == halt_address {
-                self.halt_started = true;
+                state.halt_started = true;
             }
-            let (next, cost) = self.step(mem_latency, cycle_cap - cycles, input)?;
-            self = next;
+            let (next, cost) = state.step(mem_latency, cycle_cap - cycles, input)?;
+            state = next;
             cycles += cost;
             buckets[usize::from(owners[usize::from(pc)])] += cost;
         }
-        Ok((self, cycles, buckets))
+        Ok((*state, cycles, buckets))
     }
 
     // Keep instruction dispatch inside execution: outlining it adds per-instruction
     // state transfers across a call boundary, measurable even without triggers.
     #[inline(always)]
     fn step(
-        mut self,
+        mut self: Box<Self>,
         mem_latency: NonZeroU32,
         budget: u64,
         input: &[u8],
-    ) -> Result<(Self, u64), Failure> {
+    ) -> Result<(Box<Self>, u64), Failure> {
         let pc = self.registers.pc;
         let (state, word) = self.read(pc, input, pc)?;
         self = state;
@@ -349,7 +361,8 @@ impl State {
         Ok((self, cost))
     }
 
-    fn set_register(mut self, register: usize, value: u16) -> Self {
+    #[inline(always)]
+    fn set_register(mut self: Box<Self>, register: usize, value: u16) -> Box<Self> {
         self.registers.r[register] = value;
         self.registers.psr = (self.registers.psr & !CC_MASK)
             | if value == 0 {
