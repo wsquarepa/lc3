@@ -12,11 +12,13 @@ use lc3::{Case, Format, Halted, Image, Outcome, load, prepare, run};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::num::NonZeroU32;
+use std::path::Path;
+use std::sync::OnceLock;
 
 const BUNDLED_OS_OBJ: &[u8] = include_bytes!("fixtures/bundled_os.obj");
-/// The git-excluded reference folder exists only in the main checkout, not in
-/// worktrees, so its location is named once here.
-const REFERENCE_OS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/reference/lc3tools/lc3os.obj");
+/// The reference OS inside the git-excluded reference folder, relative to the
+/// package root; where it is absent the comparisons are skipped visibly.
+const REFERENCE_OS: &str = "reference/lc3tools/lc3os.obj";
 const PRESERVED: [u16; 6] = [0x1234, 0x8765, 0xffff, 0x0000, 0x7fff, 0xa5a5];
 const NOP: u16 = 0x0000;
 const LEA_R0_DATA: u16 = 0xe000 | 10;
@@ -60,21 +62,28 @@ fn bundled() -> Image {
     load(Format::Obj, BUNDLED_OS_OBJ).unwrap().image
 }
 
-/// Returns the reference OS, or `None` after printing the skip message when the
-/// git-excluded reference folder is absent.
-fn reference() -> Option<Image> {
-    match fs::read(REFERENCE_OS) {
-        Ok(bytes) => Some(load(Format::Obj, &bytes).unwrap().image),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            writeln!(
-                std::io::stderr(),
-                "skipping: reference OS not found at {REFERENCE_OS}"
-            )
-            .expect("failed to write the reference OS skip message to stderr");
-            None
-        }
-        Err(error) => panic!("cannot read reference OS at {REFERENCE_OS}: {error}"),
-    }
+/// Returns the reference OS, or `None` when the git-excluded reference folder is
+/// absent; it is read once per test process, so the skip message prints once.
+fn reference() -> Option<&'static Image> {
+    static REFERENCE: OnceLock<Option<Image>> = OnceLock::new();
+    REFERENCE
+        .get_or_init(|| {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(REFERENCE_OS);
+            match fs::read(&path) {
+                Ok(bytes) => Some(load(Format::Obj, &bytes).unwrap().image),
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    writeln!(
+                        std::io::stderr(),
+                        "skipping: reference OS not found at {}",
+                        path.display()
+                    )
+                    .expect("failed to write the reference OS skip message to stderr");
+                    None
+                }
+                Err(error) => panic!("cannot read reference OS at {}: {error}", path.display()),
+            }
+        })
+        .as_ref()
 }
 
 /// A program at x3000: load R1-R6 with `PRESERVED`, run `r0_setup` (which may
@@ -128,7 +137,7 @@ fn assert_matches_reference(
     reference_prefix: &[u8],
 ) {
     let Some(os) = reference() else { return };
-    let theirs = halted(&os, &program(r0_setup, trap, data), input, 4);
+    let theirs = halted(os, &program(r0_setup, trap, data), input, 4);
     let expected = theirs
         .program_output
         .strip_prefix(reference_prefix)
@@ -379,7 +388,7 @@ fn halt_prints_the_short_message_and_leaves_r0_zero_in_335_cycles() {
         assert_eq!(with.registers.r[0], 0);
         assert_eq!(with.registers.r[1..7], PRESERVED);
         if let Some(reference) = reference() {
-            let theirs = halted(&reference, &program(NOP, 0xf025, &[]), &[], n);
+            let theirs = halted(reference, &program(NOP, 0xf025, &[]), &[], n);
             assert_eq!(theirs.program_output, b"");
             assert_eq!(with.registers.r[0], theirs.registers.r[0]);
         }
