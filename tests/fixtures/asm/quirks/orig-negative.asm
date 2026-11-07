@@ -1,0 +1,3 @@
+.ORIG x-1
+HALT
+.END

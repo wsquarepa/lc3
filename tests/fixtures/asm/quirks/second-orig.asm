@@ -1,0 +1,4 @@
+.ORIG x3000
+.ORIG x4000
+HALT
+.END

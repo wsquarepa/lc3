@@ -1,0 +1,2 @@
+reject	2	raw newline
+reject	3	unrecognized syntax

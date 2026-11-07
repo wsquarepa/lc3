@@ -1,0 +1,3 @@
+.ORIG x3000
+LDR R0,R0,#32
+.END

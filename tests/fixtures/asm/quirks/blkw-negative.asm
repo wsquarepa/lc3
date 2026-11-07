@@ -1,0 +1,3 @@
+.ORIG x3000
+.BLKW #-1
+.END

@@ -1,0 +1,3 @@
+.ORIG x3000
+STR R0,R0,xFFFF
+.END

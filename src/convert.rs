@@ -49,7 +49,7 @@ fn words(
                     severity: Severity::Error,
                     line: Some(line),
                     message: format!(
-                        "line {line}: invalid UTF-8 in {:?} (bytes {raw:02x?}): {error}; supply UTF-8 text",
+                        "invalid UTF-8 in {:?} (bytes {raw:02x?}): {error}; supply UTF-8 text",
                         String::from_utf8_lossy(raw)
                     ),
                 });
@@ -66,7 +66,7 @@ fn words(
             None => diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 line: Some(line),
-                message: format!("line {line}: invalid word in {text:?}; expected {expected}"),
+                message: format!("invalid word in {text:?}; expected {expected}"),
             }),
         }
     }

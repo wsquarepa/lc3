@@ -1,0 +1,11 @@
+exit=0
+errors=false
+warnings=false
+obj_bytes=6
+sym_exists=true
+[stdout]
+STARTING PASS 1
+0 errors found in first pass.
+STARTING PASS 2
+0 errors found in second pass.
+[stderr]

@@ -1,0 +1,3 @@
+.ORIG #65536
+HALT
+.END

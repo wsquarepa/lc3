@@ -44,7 +44,7 @@ fn bin_reports_every_malformed_line_with_its_number_and_text() {
     for (index, (diagnostic, bad_line)) in diagnostics.iter().zip(bad_lines).enumerate() {
         assert_eq!(diagnostic.severity, Severity::Error);
         assert_eq!(diagnostic.line, Some(index as u32 + 4));
-        assert!(diagnostic.message.contains(&(index + 4).to_string()));
+        assert!(!diagnostic.message.contains(&format!("line {}", index + 4)));
         assert!(diagnostic.message.contains(&format!("{bad_line:?}")));
         assert!(diagnostic.message.contains("exactly 16 binary digits"));
     }
@@ -62,7 +62,7 @@ fn hex_reports_every_malformed_line_with_its_number_and_text() {
     for (index, (diagnostic, bad_line)) in diagnostics.iter().zip(bad_lines).enumerate() {
         assert_eq!(diagnostic.severity, Severity::Error);
         assert_eq!(diagnostic.line, Some(index as u32 + 4));
-        assert!(diagnostic.message.contains(&(index + 4).to_string()));
+        assert!(!diagnostic.message.contains(&format!("line {}", index + 4)));
         assert!(diagnostic.message.contains(&format!("{bad_line:?}")));
         assert!(diagnostic.message.contains("one to four hex digits"));
     }
@@ -106,7 +106,7 @@ fn converters_report_invalid_utf8_on_every_line_even_in_comments() {
         for (diagnostic, line, byte) in [(&diagnostics[0], 2, "ff"), (&diagnostics[1], 3, "fe")] {
             assert_eq!(diagnostic.severity, Severity::Error);
             assert_eq!(diagnostic.line, Some(line));
-            assert!(diagnostic.message.contains(&format!("line {line}")));
+            assert!(!diagnostic.message.contains(&format!("line {line}")));
             assert!(diagnostic.message.contains("UTF-8"));
             assert!(diagnostic.message.contains(byte));
         }

@@ -25,6 +25,7 @@ impl Image {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
     Obj,
+    /// UTF-8 lc3as assembly with case-insensitive mnemonics and labels.
     Asm,
     /// UTF-8 lines of 16 binary digits, with spaces, tabs and `;` comments.
     Bin,
@@ -41,7 +42,7 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
-    /// One-based source line, or `None` for `.obj` bytes.
+    /// One-based source line, or `None` when no source line applies.
     pub line: Option<u32>,
     pub message: String,
 }
@@ -52,9 +53,17 @@ pub struct Loaded {
     pub warnings: Vec<Diagnostic>,
 }
 
-/// Loads big-endian `.obj` bytes containing an origin followed by program words.
-/// Returns an image and warnings, or one error diagnostic for an empty source or
-/// an odd byte length. An origin without program words is accepted.
+/// Loads an image from `.obj`, `.asm`, `.bin` or `.hex` source bytes.
+/// `.obj` is a big-endian origin followed by words. The text formats accept
+/// UTF-8: `.asm` uses lc3as syntax, `.bin` uses 16 binary digits per word,
+/// and `.hex` uses one to four hex digits with an optional `x`/`X` prefix.
+/// Text formats allow `;` comments; converters take the first word as origin.
+/// Returns an image with assembler warnings for NOP labels and ignored text
+/// after `.END`, or error diagnostics without an image. Errors cover malformed
+/// bytes or text, missing origins, and invalid assembler operands or structure.
+/// Text diagnostics carry one-based lines when applicable, while `.obj` errors
+/// and converter sources without words have no line. Origins without words are
+/// accepted. Diagnostic messages do not repeat the structured line number.
 pub fn load(format: Format, bytes: &[u8]) -> Result<Loaded, Vec<Diagnostic>> {
     match format {
         Format::Obj => load_obj(bytes),

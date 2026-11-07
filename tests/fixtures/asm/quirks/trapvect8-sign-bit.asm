@@ -1,0 +1,3 @@
+.ORIG x3000
+TRAP #128
+.END

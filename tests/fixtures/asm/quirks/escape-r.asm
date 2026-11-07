@@ -1,0 +1,3 @@
+.ORIG x3000
+.STRINGZ "\r"
+.END

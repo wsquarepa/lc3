@@ -1,0 +1,12 @@
+exit=0
+errors=false
+warnings=true
+obj_bytes=2
+sym_exists=true
+[stdout]
+STARTING PASS 1
+0 errors found in first pass.
+STARTING PASS 2
+0 errors found in second pass.
+[stderr]
+  2: WARNING: all text after .END ignored

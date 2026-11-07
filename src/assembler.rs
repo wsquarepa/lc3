@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 
 use crate::{Diagnostic, Format, Loaded, Severity, load};
 
@@ -21,9 +21,11 @@ enum Emission<'a> {
 }
 
 struct Layout<'a> {
-    origin: u16,
+    origin: Option<u16>,
     statements: Vec<Statement<'a>>,
     labels: HashMap<String, u16>,
+    warnings: Vec<Diagnostic>,
+    errors: Vec<Diagnostic>,
 }
 
 /// Assembles UTF-8 lc3as source bytes into an image without writing files.
@@ -44,32 +46,50 @@ pub(crate) fn assemble(bytes: &[u8]) -> Result<Loaded, Vec<Diagnostic>> {
             message: format!("invalid UTF-8 at byte offset {}", error.valid_up_to()),
         }]
     })?;
-    assemble_source(source).map_err(|error| vec![error])
+    assemble_source(source)
 }
 
-fn assemble_source(source: &str) -> Result<Loaded, Diagnostic> {
-    let layout = layout(source)?;
-    let mut words = vec![layout.origin];
+fn assemble_source(source: &str) -> Result<Loaded, Vec<Diagnostic>> {
+    let layout = layout(source);
+    let mut errors = layout.errors;
+    let mut words = Vec::new();
     for statement in layout.statements {
         match statement.emission {
             Emission::Data(data) => words.extend(data),
-            Emission::Instruction { opcode, operands } => words.push(
-                encode_instruction(&opcode, operands, &layout.labels, statement.address)
-                    .map_err(|reason| diagnostic(statement.line, statement.text, &reason))?,
-            ),
+            Emission::Instruction { opcode, operands } => {
+                match encode_instruction(&opcode, operands, &layout.labels, statement.address) {
+                    Ok(word) => words.push(word),
+                    Err(reason) => errors.push(diagnostic(statement.line, statement.text, &reason)),
+                }
+            }
         }
     }
-    let bytes: Vec<_> = words.into_iter().flat_map(u16::to_be_bytes).collect();
-    load(Format::Obj, &bytes)
-        .map_err(|errors| diagnostic(1, source, &format!("invalid assembled image: {errors:?}")))
+    if !errors.is_empty() {
+        errors.sort_by_key(|error| error.line);
+        return Err(errors);
+    }
+    let origin = layout
+        .origin
+        .ok_or_else(|| vec![diagnostic(1, source, "missing .ORIG")])?;
+    let bytes: Vec<_> = std::iter::once(origin)
+        .chain(words)
+        .flat_map(u16::to_be_bytes)
+        .collect();
+    let mut loaded = load(Format::Obj, &bytes)?;
+    loaded.warnings = layout.warnings;
+    Ok(loaded)
 }
 
-fn layout(source: &str) -> Result<Layout<'_>, Diagnostic> {
+fn layout(source: &str) -> Layout<'_> {
     let mut origin = None;
+    let mut saw_origin = false;
     let mut address = 0;
     let mut labels = HashMap::new();
     let mut statements = Vec::new();
     let mut ended = false;
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    let mut warned_after_end = false;
     let mut last_line = 1;
     let mut last_text = "";
     let mut source_offset = 0;
@@ -78,76 +98,100 @@ fn layout(source: &str) -> Result<Layout<'_>, Diagnostic> {
         source_offset += raw_line.len();
         let text = raw_line.strip_suffix('\n').unwrap_or(raw_line);
         let text = text.strip_suffix('\r').unwrap_or(text);
-        let line = u32::try_from(index + 1)
-            .map_err(|_| diagnostic(u32::MAX, text, "source exceeds the line number limit"))?;
+        let Ok(line) = u32::try_from(index + 1) else {
+            errors.push(diagnostic(
+                u32::MAX,
+                text,
+                "source exceeds the line number limit",
+            ));
+            break;
+        };
         last_line = line;
         last_text = text;
-        let parsed = parse_line(text).map_err(|reason| diagnostic(line, text, &reason))?;
-        if parsed.labels.is_empty() && parsed.opcode.is_empty() {
+        if ended {
+            if !warned_after_end && !before_comment(text).trim_matches([' ', '\t']).is_empty() {
+                warnings.push(Diagnostic {
+                    severity: Severity::Warning,
+                    ..diagnostic(line, text, "text after .END is ignored")
+                });
+                warned_after_end = true;
+            }
             continue;
         }
-        if ended {
-            return Err(diagnostic(line, text, "text after .END is unsupported"));
+        let parsed = match parse_line(text) {
+            Ok(parsed) => parsed,
+            Err(reason) => {
+                errors.push(diagnostic(line, text, &reason));
+                continue;
+            }
+        };
+        if parsed
+            .labels
+            .first()
+            .is_some_and(|label| label.eq_ignore_ascii_case("NOP"))
+        {
+            warnings.push(Diagnostic {
+                severity: Severity::Warning,
+                ..diagnostic(line, text, "NOP is a label and emits no word")
+            });
         }
         for label in parsed.labels {
-            if origin.is_none() {
-                return Err(diagnostic(line, text, "label before .ORIG"));
+            if !saw_origin {
+                errors.push(diagnostic(line, text, "label before .ORIG"));
             }
-            if labels.insert(label.to_ascii_uppercase(), address).is_some() {
-                return Err(diagnostic(
-                    line,
-                    text,
-                    &format!("duplicate label {label:?}"),
-                ));
-            }
-        }
-        let emission = match parsed.opcode.as_str() {
-            "" => continue,
-            ".ORIG" => {
-                if origin.is_some() {
-                    return Err(diagnostic(line, text, "second .ORIG is not allowed"));
-                }
-                address = literal(parsed.operands, -32768, 65535)
-                    .map_err(|reason| diagnostic(line, text, &reason))?;
-                origin = Some(address);
-                continue;
-            }
-            ".END" if parsed.operands.is_empty() => {
-                ended = true;
-                continue;
-            }
-            ".BLKW" => Emission::Data(vec![
-                0;
-                usize::from(
-                    literal(parsed.operands, 0, 65535)
-                        .map_err(|reason| diagnostic(line, text, &reason))?
-                )
-            ]),
-            ".STRINGZ" => {
-                let words = string_words(parsed.operands)
-                    .map_err(|reason| diagnostic(line, text, &reason))?;
-                let code_end = before_comment(text).trim_end_matches([' ', '\t']).len();
-                if string_swallows_lines(parsed.operands, &source_tail[code_end..]) {
-                    return Err(diagnostic(
+            match labels.entry(label.to_ascii_uppercase()) {
+                Entry::Occupied(_) => {
+                    errors.push(diagnostic(
                         line,
                         text,
-                        ".STRINGZ would swallow later lines in lc3as; remove the ambiguous closing backslash or later quote",
+                        &format!("duplicate label {label:?}"),
                     ));
                 }
-                Emission::Data(words)
+                Entry::Vacant(entry) => {
+                    entry.insert(address);
+                }
             }
-            _ => Emission::Instruction {
-                opcode: parsed.opcode,
-                operands: parsed.operands,
-            },
-        };
-        if origin.is_none() {
-            return Err(diagnostic(
+        }
+        match parsed.opcode.as_str() {
+            "" => continue,
+            ".ORIG" => {
+                if saw_origin {
+                    errors.push(diagnostic(line, text, "second .ORIG is not allowed"));
+                }
+                match literal(parsed.operands, 0, 65535) {
+                    Ok(value) if !saw_origin => {
+                        address = value;
+                        origin = Some(value);
+                    }
+                    Ok(_) => {}
+                    Err(reason) => errors.push(diagnostic(line, text, &reason)),
+                }
+                saw_origin = true;
+                continue;
+            }
+            ".END" => {
+                ended = true;
+                if !parsed.operands.is_empty() {
+                    errors.push(diagnostic(line, text, ".END takes no operands"));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if !saw_origin {
+            errors.push(diagnostic(
                 line,
                 text,
                 "instruction or directive before .ORIG",
             ));
         }
+        let emission = match emission(parsed.opcode, parsed.operands, text, source_tail) {
+            Ok(emission) => emission,
+            Err(reason) => {
+                errors.push(diagnostic(line, text, &reason));
+                continue;
+            }
+        };
         let word_count = match &emission {
             Emission::Data(words) => words.len(),
             Emission::Instruction { .. } => 1,
@@ -161,14 +205,43 @@ fn layout(source: &str) -> Result<Layout<'_>, Diagnostic> {
         address = address.wrapping_add(word_count as u16);
     }
     if !ended {
-        return Err(diagnostic(last_line, last_text, "missing .END"));
+        errors.push(diagnostic(last_line, last_text, "missing .END"));
     }
-    let origin = origin.ok_or_else(|| diagnostic(last_line, ".END", "missing .ORIG"))?;
-    Ok(Layout {
+    if !saw_origin {
+        errors.push(diagnostic(last_line, last_text, "missing .ORIG"));
+    }
+    Layout {
         origin,
         statements,
         labels,
-    })
+        warnings,
+        errors,
+    }
+}
+
+fn emission<'a>(
+    opcode: String,
+    operands: &'a str,
+    text: &str,
+    source_tail: &str,
+) -> Result<Emission<'a>, String> {
+    match opcode.as_str() {
+        ".BLKW" => {
+            let count = usize::from(literal(operands, 0, 65535)?);
+            Ok(Emission::Data(vec![0; count]))
+        }
+        ".STRINGZ" => {
+            let words = string_words(operands)?;
+            let code_end = before_comment(text).trim_end_matches([' ', '\t']).len();
+            if string_swallows_lines(operands, &source_tail[code_end..]) {
+                return Err(
+                    ".STRINGZ would swallow later lines in lc3as; remove the ambiguous closing backslash or later quote".to_owned(),
+                );
+            }
+            Ok(Emission::Data(words))
+        }
+        _ => Ok(Emission::Instruction { opcode, operands }),
+    }
 }
 
 fn parse_line(text: &str) -> Result<ParsedLine<'_>, String> {
@@ -552,6 +625,6 @@ fn diagnostic(line: u32, text: &str, reason: &str) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         line: Some(line),
-        message: format!("line {line}: {reason}: {text:?}"),
+        message: format!("{reason}: {text:?}"),
     }
 }

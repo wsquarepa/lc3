@@ -1,0 +1,3 @@
+.ORIG xFFFF
+HALT
+.END

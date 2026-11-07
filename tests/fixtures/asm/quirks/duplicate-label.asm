@@ -1,0 +1,4 @@
+.ORIG x3000
+Same HALT
+sAmE HALT
+.END

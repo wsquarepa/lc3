@@ -1,0 +1,4 @@
+.ORIG x3000
+nOp
+BR NOP
+.END

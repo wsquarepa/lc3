@@ -1,0 +1,13 @@
+exit=0
+errors=false
+warnings=true
+obj_bytes=4
+sym_exists=true
+[stdout]
+STARTING PASS 1
+0 errors found in first pass.
+STARTING PASS 2
+0 errors found in second pass.
+[stderr]
+  2: multiple .ORIG directives found
+  2: multiple .ORIG directives found

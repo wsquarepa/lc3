@@ -1,0 +1,10 @@
+exit=1
+errors=true
+warnings=false
+obj_bytes=0
+sym_exists=true
+[stdout]
+STARTING PASS 1
+1 errors found in first pass.
+[stderr]
+  3: label sAmE has already appeared
