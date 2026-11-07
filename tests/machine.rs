@@ -46,8 +46,17 @@ fn preparation_rejects_missing_images_before_boot() {
 }
 
 #[test]
-fn boot_reports_illegal_words_and_the_fixed_cycle_cap() {
-    for (word, kind) in [(0x8001, IllegalKind::Rti), (0xd123, IllegalKind::Reserved)] {
+fn boot_reports_illegal_words_including_malformed_encodings() {
+    for (word, kind) in [
+        (0x8001, IllegalKind::Rti),
+        (0xd123, IllegalKind::Reserved),
+        (0x1018, IllegalKind::MalformedEncoding),
+        (0x5018, IllegalKind::MalformedEncoding),
+        (0xc1c1, IllegalKind::MalformedEncoding),
+        (0x4201, IllegalKind::MalformedEncoding),
+        (0x903e, IllegalKind::MalformedEncoding),
+        (0xf100, IllegalKind::MalformedEncoding),
+    ] {
         assert_eq!(
             prepare(
                 &image(0x0200, &[word]),
@@ -63,6 +72,10 @@ fn boot_reports_illegal_words_and_the_fixed_cycle_cap() {
             }))
         );
     }
+}
+
+#[test]
+fn boot_reports_the_fixed_cycle_cap() {
     assert_eq!(
         prepare(
             &image(0x0200, &[0x0fff]),

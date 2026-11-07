@@ -403,11 +403,12 @@ fn halt_output_continues_across_returning_and_repeated_halt_traps() {
 
 #[test]
 fn only_an_executed_exact_halt_trap_starts_halt_output_including_inside_the_os() {
-    for word in [0xf040, 0xf125] {
+    for word in [0xf040, 0xf024] {
         let prepared = prepare(
             &os(),
             &[
                 image(0x3000, &[word]),
+                image(0x0024, &[0x0210]),
                 image(0x0040, &[0x0210]),
                 image(
                     0x0210,

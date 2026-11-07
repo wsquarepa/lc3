@@ -75,10 +75,15 @@ pub enum Failure {
     },
 }
 
+/// Why a fetched word cannot execute; returned by run and boot failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IllegalKind {
+    /// Any opcode x8 word; RTI is unsupported without privilege modes.
     Rti,
+    /// Any opcode xD word, which is reserved by the instruction set.
     Reserved,
+    /// Invalid fixed bits in an ADD, AND, JMP, JSRR, NOT, or TRAP encoding.
+    MalformedEncoding,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +135,8 @@ pub fn prepare(
 /// DDR reads return x0000, including instruction fetches.
 /// On halt, console bytes split into program output and halt output at the first
 /// executed word xF025, whether fetched from an image or the OS.
+/// Illegal words fail before execution at their unincremented PC with zero cycle
+/// cost; a zero cycle cap fails before fetching any word.
 pub fn run(prepared: &Prepared, case: &Case) -> Outcome {
     match prepared
         .snapshot
